@@ -33,7 +33,6 @@ from bpy_extras.node_shader_utils import PrincipledBSDFWrapper
 ###################
 
 MAGIC = b'\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1'
-WORD_CLSID = "00020900-0000-0000-C000-000000000046"
 
 MIN_FILE_SIZE = 1536
 UNKNOWN_SIZE = 0x7FFFFFFF
@@ -46,7 +45,7 @@ FREESECT = 0xFFFFFFFF  # (-1) unallocated sector
 MAX_STREAM = 2  # element is a stream object
 ROOT_STORE = 5  # element is a root storage
 
-TYP_REFS = {0x1040, 0x2034, 0x2035}
+TYP_REFS = {0x9, 0x1040, 0x2034, 0x2035}
 TYP_SHORT = {0x103, 0x105, 0x99C, 0x2500, 0x3005}
 TYP_LINK = {0x1020, 0x1030, 0x1050, 0x1080, 0x3002, 0x4003}
 TYP_NAME = {0x340, 0x456, 0x962, 0x10A0, 0x1010, 0x1230, 0x4001}
