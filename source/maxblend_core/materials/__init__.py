@@ -92,9 +92,12 @@ def _id(value: object) -> bool:
 
 
 def _number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    try:
+        return float(value) if math.isfinite(value) else None
+    except (OverflowError, ValueError, TypeError):
+        return None
 
 
 def _safe(value: object) -> object:
@@ -182,6 +185,10 @@ def plan_material(material_id: str, attributes: Mapping[str, object]) -> Materia
             key, raw_value = index[alias]
             used.add(key)
             value = _scalar(channel, raw_value, key, ds)
+            if channel == "base_color" and isinstance(raw_value, (list, tuple)) \
+                    and len(raw_value) == 4 and raw_value[3] != 1:
+                ds.append(_diag("rgba_alpha_ambiguous",
+                                "RGBA diffuse alpha not assumed to be surface opacity", key))
             if value is not None:
                 if invert:
                     value = 1 - value
@@ -236,6 +243,7 @@ def plan_material(material_id: str, attributes: Mapping[str, object]) -> Materia
             continue
         intent = TextureIntent(channel, descriptor["id"],
                                "data" if channel in _DATA else "color",
+                               "ambiguous" if native_name.casefold() in ("transmap", "bump") else
                                "invert" if native_name.casefold() in ("glossmap", "glossiness") else "direct",
                                state, descriptor.get("use_alpha") is True)
         intents.append(intent)
