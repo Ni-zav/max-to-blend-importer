@@ -38,9 +38,13 @@ It must not be advertised as repairing `get_bitmap()`, `get_texmap()`, or
    protocol is implemented. `TextureReference.reference` is already sanitized
    by contract; F6 must call `resolve_detailed(raw_source, slot=...)` **before**
    treating raw MAX paths as safe references. `ResolutionDetail.resolved_path`
-   and `tile_paths` are internal-only; use `manifest_record()` for a narrowly
-   sanitized local manifest. Never print exception details, path objects,
-   parsed source path text, or customer names to public logs/CI.
+   and `tile_paths` are internal-only. `manifest_record()` is a compatibility
+   alias of `internal_diagnostic_record()`; both are **internal-only F4**
+   diagnostics, NOT P0 wire JSON and NOT public logs. Use
+   `project_texture_v1` for frozen P0 texture records after the
+   caller independently supplies stable ID and provenance. Never print exception
+   details, path objects, parsed source path text, filenames or customer names
+   to public logs/CI.
 
 ## Semantics and limits
 
@@ -73,3 +77,59 @@ python -m compileall -q source/maxblend_core/textures tests/textures
 
 These synthetic fixture checks do **not** establish actual 3ds Max or Blender
 conversion fidelity. No native `.max` export feature is provided.
+
+## Strict P0 `maxblend.scene/v1` texture item projection (G1 handoff)
+
+`from maxblend_core.textures import project_texture_v1` is a standalone
+Blender-free adapter function. On a locally authorized `ResolutionDetail`:
+
+```python
+record = project_texture_v1(
+    detail,
+    stable_id="texture:trusted-native-0001",     # F6-owned deterministic identity
+    provenance_method="native",                 # verified F6 source knowledge
+    provenance_evidence="verified_metadata_link", # path-free token, optional
+)
+```
+
+The returned JSON item has **exactly** these eight P0 keys (frozen platform
+schema blob `976b084ba6b357756872911bdb3de483cd8cff51`):
+`id`, `source_ref`, `path_status`, `channel`, `color_space_role`,
+`sha256`, `provenance`, `warnings`. Tests pin P0's exact texture-item
+JSON-schema slice under `tests/textures/fixtures/`. No change to P0 or F0.
+
+**Exact mapping** for F6/P6: `ResolutionDetail.state -> path_status`,
+`channel -> channel`, `color_space_role -> color_space_role`,
+`sha256 -> sha256` only if status is `found` and hash syntax is verified
+(other states yield null), `diagnostics -> warnings[]` with
+`code,severity,reason,evidence,attribute,before,after` (all seven required
+fields). Warning reasons are **fixed trusted descriptions**, never arbitrary
+`Diagnostic.message/evidence` strings or local paths. F6 must supply stable
+manifest `id` tied to validated source semantics (never a guessed basename or
+process memory ID), plus `provenance.method` and optional path-free evidence
+token. `source_ref` is **null by default**; for an authorized private/local
+manifest, `publish_basename=True` exposes only revalidated sanitized
+basename, never original absolute path, parent directories or a client path.
+No public-facing log should contain the returned record if hashes, IDs or
+basenames are confidential; redact by policy at the logging boundary.
+
+Color-space mismatch against a known socket is explicitly warned, never
+silently corrected. `missing`, `blocked` and `ambiguous` remain their
+literal states and do not expose a verified digest. UDIM tile paths and
+tile hashes are internal F4 sidecars (the strict P0 texture item has no
+`udim_tiles` field). F6 should keep a private sidecar or pursue a separately
+reviewed schema version if that information must cross the P6 wire boundary.
+No renderer shader graph or native binary extraction is claimed.
+
+### G1 commands and independent test boundary
+
+```sh
+PYTHONPATH=source python -m unittest discover -s tests/textures -v
+python -m compileall -q source/maxblend_core/textures tests/textures
+PYTHONPATH=source python -m unittest discover -s tests/baseline -v
+```
+
+The fork root CI still tests `tests/baseline` only. G1 or a CI owner must
+run `tests/textures` on a complete checkout at the exact PR HEAD before merge.
+This component does **not** need a Blender-dependent node smoke test; F3/F6
+own Blender material application and native MAX loading respectively.
