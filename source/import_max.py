@@ -2250,6 +2250,10 @@ def create_skipable(context, node, skip):
 def create_mesh(context, settings, node, msh, mat, mtx):
     created = []
     uid = get_guid(msh)
+    if _strict_import and msh is not None and not msh.get_first(0x08FE):
+        # Unverified procedural/parametric classes must not route around F2.
+        _import_report.warn("NATIVE_PRIMITIVE_DECODER_UNVERIFIED")
+        return [], uid
     if msh is not None:
         object_list.clear()
         if (uid in {POLY_MESH, EDIT_POLY}):
