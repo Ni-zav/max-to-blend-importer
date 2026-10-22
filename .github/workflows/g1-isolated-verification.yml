@@ -16,24 +16,17 @@ jobs:
           python-version: '3.11'
       - name: Install frozen JSON schema validator for strict fixture checks
         run: python -m pip install jsonschema==4.23.0
-      - name: Compile Wave 1 modules and tests
-        run: python -m compileall -q source tests
-      - name: Wave 0 baseline
-        run: PYTHONPATH=source python -m unittest discover -s tests/baseline -v
-      - name: F1 transform tests
-        run: PYTHONPATH=source python -m unittest discover -s tests/transforms -v
-      - name: F2 geometry tests
-        run: PYTHONPATH=source python -m unittest discover -s tests/geometry -v
-      - name: F3 material tests (P0-schema tests require private platform checkout)
-        run: PYTHONPATH=source python -m unittest discover -s tests/materials -p 'test_*.py' -v
-      - name: F4 texture tests
-        run: PYTHONPATH=source python -m unittest discover -s tests/textures -v
-      - name: F5 container tests
-        run: PYTHONPATH=source python -m unittest discover -s tests/container -v
-      - name: F7 scene-node tests
-        run: PYTHONPATH=source python -m unittest discover -s tests/scene_nodes -v
-      - name: F8 instancing tests
-        run: PYTHONPATH=source python -m unittest discover -s tests/instances -v
+      - name: G1 independent regression suites (continue through failures; fail job if any failed)
+        shell: bash
+        run: |
+          set +e
+          bad=0
+          python -m compileall -q source tests || bad=1
+          for suite in baseline transforms geometry materials textures container scene_nodes instances; do
+            echo "==== G1 suite: $suite ===="
+            PYTHONPATH=source python -m unittest discover -s "tests/$suite" -p 'test_*.py' -v || bad=1
+          done
+          exit "$bad"
   blender-materials:
     runs-on: ubuntu-24.04
     steps:
