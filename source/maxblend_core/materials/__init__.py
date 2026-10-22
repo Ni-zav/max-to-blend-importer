@@ -241,8 +241,12 @@ def plan_material(material_id: str, attributes: Mapping[str, object]) -> Materia
             ds.append(_diag("duplicate_map", "Conflicting maps target the same Principled socket",
                             native_name[:128]))
             continue
-        intent = TextureIntent(channel, descriptor["id"],
-                               "data" if channel in _DATA else "color",
+        # When the opacity channel explicitly uses the *alpha* output of an
+        # albedo image, its RGB color-space role must remain 'color'.
+        # Only standalone grayscale opacity maps are interpreted as data.
+        role = ("color" if channel == "opacity" and descriptor.get("use_alpha") is True
+                else "data" if channel in _DATA else "color")
+        intent = TextureIntent(channel, descriptor["id"], role,
                                "ambiguous" if native_name.casefold() in ("transmap", "bump") else
                                "invert" if native_name.casefold() in ("glossmap", "glossiness") else "direct",
                                state, descriptor.get("use_alpha") is True)
@@ -299,6 +303,9 @@ def plan_material(material_id: str, attributes: Mapping[str, object]) -> Materia
         ds.append(_diag("unmapped_parameter", "Native property has no verified mapping", key))
     if len(unknown) > 64:
         ds.append(_diag("unmapped_parameter_count", "Additional unmapped properties recorded"))
+    if intents and not any(d.code == "unresolved_texture" for d in ds):
+        ds.append(_diag("shader_links_unverified",
+                        "Decoded bitmap references are not proof of real Blender node links"))
     known = any(v is not None for v in slots.values())
     if family is not None and not known and family not in _COMPOSITES:
         ds.append(_diag("no_shader_evidence", "Material name alone is not shader fidelity"))
