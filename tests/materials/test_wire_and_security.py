@@ -48,6 +48,29 @@ class WireTests(unittest.TestCase):
             self.assertIsNone(d.plan.pbr_slots[key])
         self.assertGreaterEqual(d.warning_counts["warning"], 3)
 
+    def test_shared_rgba_image_uses_color_space_without_false_loss(self):
+        detail = plan_material("mat:rgba_shared", {
+            "class": "PhysicalMtl",
+            "textures": {
+                "bitmap": {"id": "tex:rgba", "kind": "bitmap", "state": "found"},
+                "alpha": {"id": "tex:rgba", "kind": "bitmap", "state": "found",
+                          "use_alpha": True},
+            },
+        })
+        self.assertEqual([t.role for t in detail.textures], ["color", "color"])
+        self.assertTrue(detail.textures[1].use_alpha)
+        self.assertEqual(detail.plan.pbr_slots["opacity"]["texture_id"], "tex:rgba")
+        self.assertEqual(detail.plan.coverage, "partial")
+        self.assertIn("shader_links_unverified", {d.code for d in detail.plan.diagnostics})
+
+    def test_missing_map_not_claimed_supported(self):
+        detail = plan_material("mat:missing", {
+            "class": "PhysicalMtl",
+            "textures": {"bitmap": {"id": "tex:missing", "state": "missing"}},
+        })
+        self.assertNotEqual(detail.plan.coverage, "supported")
+        self.assertIn("unresolved_texture", {d.code for d in detail.plan.diagnostics})
+
     def test_rgba_alpha_and_ambiguous_bump(self):
         d = plan_material("mat:rgba", {"class": "Physical", "params": {
             "base_color": (0.1, 0.2, 0.3, 0.25),
