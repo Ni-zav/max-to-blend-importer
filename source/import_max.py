@@ -2258,6 +2258,16 @@ def read_scene(context, maxfile, settings, mscale, transform):
     # print('Directory', maxfile.direntries[0].kids_dict.keys())
 
 
+def _dispatch_scene_import(context, maxfile, settings, mscale, transform):
+    """Wave 0 integration port: use the untouched upstream scene reader by default.
+
+    Wave 2 integrators may wire reviewed maxblend_core implementations here,
+    keeping the original read_scene() as the compatibility fallback. Deliberately
+    no plugin discovery, environment-driven loading, or executable file hooks.
+    """
+    return read_scene(context, maxfile, settings, mscale, transform)
+
+
 def read(context, filename, mscale, obtypes, search, transform):
     if (is_maxfile(filename)):
         settings = filename, obtypes, search
@@ -2267,7 +2277,7 @@ def read(context, filename, mscale, obtypes, search, transform):
         read_directory(maxfile, filename)
         read_class_directory(maxfile, filename)
         read_video_postqueue(maxfile, filename)
-        read_scene(context, maxfile, settings, mscale, transform)
+        _dispatch_scene_import(context, maxfile, settings, mscale, transform)
     else:
         print("File seems to be no 3D Studio Max file!")
 

@@ -125,7 +125,7 @@ class IO_FH_max(bpy.types.FileHandler):
     bl_idname = "IO_FH_max"
     bl_label = "3DS MAX"
     bl_import_operator = "import_scene.max"
-    bl_export_operator = "export_scene.max"
+    # Deliberately no bl_export_operator: no native .max exporter exists.
     bl_file_extensions = ".max"
 
     @classmethod

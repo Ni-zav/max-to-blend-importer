@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: importer-wave0-baseline
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax
+        run: python -m compileall -q source tests/baseline
+      - name: Offline baseline tests
+        run: python -m unittest discover -s tests/baseline -v
+      - name: Synthetic header probe only
+        run: python tests/baseline/perf_probe.py
+  blender-4-2:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Blender 4.2.0 from official release with publisher checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://download.blender.org/release/Blender4.2
+          curl --fail --location --retry 3 --silent --show-error "$base/blender-4.2.0-linux-x64.tar.xz" -o blender.tar.xz
+          curl --fail --location --retry 3 --silent --show-error "$base/blender-4.2.0.sha256" -o blender.sha256
+          grep 'blender-4.2.0-linux-x64.tar.xz' blender.sha256 | sed 's#blender-4.2.0-linux-x64.tar.xz#blender.tar.xz#' | sha256sum --check -
+          tar -xf blender.tar.xz
+          echo "$PWD/blender-4.2.0-linux-x64" >> "$GITHUB_PATH"
+      - name: Build installable extension
+        run: |
+          mkdir -p dist
+          blender --command extension build --source-dir=source --output-dir=dist
+          test "$(find dist -maxdepth 1 -name '*.zip' | wc -l)" -eq 1
+          unzip -t dist/*.zip
+      - name: Headless register and unregister
+        run: blender --background --factory-startup --python tests/baseline/blender_smoke.py
