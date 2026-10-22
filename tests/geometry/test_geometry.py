@@ -10,7 +10,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'source'))
 from maxblend_core.geometry import (  # noqa: E402
     Limits, MapChunk, PolyFaceChunk, reconstruct_editable_mesh,
-    reconstruct_editable_poly, unsupported_geometry,
+    reconstruct_editable_poly, unsupported_geometry, project_material_slots,
 )
 
 
@@ -56,7 +56,7 @@ class EditableMeshTests(unittest.TestCase):
         result = self.recon()
         self.assertEqual(result.status, 'partial')  # Normals unknown, not invented.
         self.assertEqual(result.mesh.faces, ((0, 1, 2), (0, 2, 3)))
-        self.assertEqual(result.plan.face_material_indices, (1, 12))
+        self.assertIsNone(result.plan.face_material_indices)
         self.assertEqual(result.mesh.face_origins[1].source_face, 1)
         self.assertEqual(result.mesh.face_origins[0].edge_flags, 7)
         self.assertEqual(result.mesh.vertices[2], (2, 3, 0))
@@ -137,7 +137,7 @@ class EditableMeshTests(unittest.TestCase):
     def test_normals_and_explicit_sharp_edges(self):
         normals = [(0, 0, 2)] * 6
         result = self.recon(sharp_edges=[(2, 0)], corner_normals=normals)
-        self.assertEqual(result.status, 'success')
+        self.assertEqual(result.status, 'partial')  # Material slots unresolved.
         self.assertEqual(result.mesh.corner_normals, ((0, 0, 1),) * 6)
         self.assertEqual(result.mesh.sharp_edges, ((0, 2),))
 
@@ -164,14 +164,14 @@ class EditablePolyTests(unittest.TestCase):
         self.assertEqual(list(map(len, result.mesh.faces)), [5, 3])
         self.assertEqual(result.mesh.source_point_ids, (42, 43, 44, 45, 46))
         self.assertEqual(result.mesh.face_origins[0].source_element, 99)
-        self.assertEqual(result.plan.face_material_indices, (2, 7))
+        self.assertIsNone(result.plan.face_material_indices)
 
     def test_poly_uv_multiple_maps_and_winding(self):
         m = uvmap(2, [(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)], [(3, 2, 1, 0)],
                   encoding='polygons')
         result = self.recon(faces=[face((3, 2, 1, 0))], maps=[m],
                             corner_normals=[(0, 0, 1)] * 4)
-        self.assertEqual(result.status, 'success')
+        self.assertEqual(result.status, 'partial')  # Material slots unresolved.
         self.assertEqual(result.mesh.faces, ((3, 2, 1, 0),))
         self.assertEqual(result.mesh.maps[0].corner_indices, ((3, 2, 1, 0),))
 
@@ -212,6 +212,76 @@ class EditablePolyTests(unittest.TestCase):
         self.assertEqual(result.status, 'unsupported')
         self.assertIsNone(result.mesh)
         self.assertEqual(result.plan.vertex_count, None)
+
+
+
+class MaterialSlotProjectionTests(unittest.TestCase):
+    """Raw MAX IDs and Blender/P0 zero-based slot indices are distinct."""
+
+    def native_three(self, **kw):
+        verts = ((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0))
+        faces = ((0, 1, 2), (0, 2, 3), (1, 2, 3))
+        return reconstruct_editable_mesh('mat', pack_mesh_verts(verts),
+                                         pack_mesh_faces(faces, (2, 7, 65535)), **kw)
+
+    def test_native_noncontiguous_ids_cannot_silently_become_slots(self):
+        result = self.native_three()
+        self.assertEqual(result.mesh.face_material_ids, (2, 7, 65535))
+        self.assertIsNone(result.plan.face_material_indices)
+        self.assertEqual(result.status, 'partial')
+        self.assertIn('material_slot_mapping_unresolved', [d.code for d in result.diagnostics])
+
+    def test_complete_explicit_map_produces_ordered_zero_based_slots(self):
+        # The native IDs have no positional relation to the three material slots.
+        original = self.native_three(corner_normals=[(0, 0, 1)] * 9)
+        projected = project_material_slots(original, {2: 0, 7: 2, 65535: 1}, slot_count=3)
+        self.assertEqual(projected.status, 'success')
+        self.assertEqual(projected.plan.face_material_indices, (0, 2, 1))
+        self.assertEqual(projected.mesh.face_material_ids, (2, 7, 65535))
+        self.assertIs(projected.mesh, original.mesh)  # Instancing-safe immutable buffer.
+        self.assertIsNone(original.plan.face_material_indices)
+        self.assertFalse([d for d in projected.diagnostics if d.code == 'material_slot_mapping_unresolved'])
+
+    def test_missing_map_fails_closed_without_partial_projection(self):
+        result = self.native_three()
+        projected = project_material_slots(result, {2: 0, 7: 2}, slot_count=3)
+        self.assertIsNone(projected.plan.face_material_indices)
+        self.assertEqual(projected.status, 'partial')
+        self.assertEqual(projected.mesh.face_material_ids, (2, 7, 65535))
+        self.assertIn('material_slot_mapping_incomplete', [d.code for d in projected.diagnostics])
+
+    def test_invalid_slot_and_mapping_types_are_rejected(self):
+        result = self.native_three()
+        for slots, mapping in (
+            (2, {2: 0, 7: 1, 65535: 2}),
+            (3, {2: 0, 7: -1, 65535: 2}),
+            (3, {2: 0, 7: True, 65535: 2}),
+            (3, {-1: 0, 7: 2, 65535: 1}),
+            (True, {2: 0, 7: 2, 65535: 1}),
+            (3, None),
+        ):
+            with self.subTest(slots=slots, mapping=mapping):
+                projected = project_material_slots(result, mapping, slot_count=slots)
+                self.assertIsNone(projected.plan.face_material_indices)
+                self.assertEqual(projected.status, 'partial')
+                self.assertIn('invalid_material_slot_mapping', [d.code for d in projected.diagnostics])
+
+    def test_unknown_native_face_id_remains_unknown_even_with_map(self):
+        original = reconstruct_editable_poly('poly', pack_poly_verts(V),
+                                              [face((0, 1, 2), None)])
+        projected = project_material_slots(original, {2: 0}, slot_count=1)
+        self.assertEqual(projected.mesh.face_material_ids, (None,))
+        self.assertIsNone(projected.plan.face_material_indices)
+        self.assertIn('material_slot_mapping_incomplete', [d.code for d in projected.diagnostics])
+
+    def test_uv_corruption_remains_partial_after_valid_material_projection(self):
+        bad = uvmap(1, [(0, 0, 0)], [(9, 9, 9)] * 3)
+        original = self.native_three(maps=[bad], corner_normals=[(0, 0, 1)] * 9)
+        projected = project_material_slots(original, {2: 0, 7: 2, 65535: 1}, slot_count=3)
+        self.assertEqual(projected.plan.face_material_indices, (0, 2, 1))
+        self.assertEqual(projected.status, 'partial')
+        self.assertIn('invalid_uv_topology', [d.code for d in projected.diagnostics])
+
 
 
 if __name__ == '__main__':

@@ -8,7 +8,8 @@ F6 must call this through the F0 dispatcher after F5 validates the container.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from collections.abc import Mapping
 import math
 import struct
 from typing import Literal, Sequence
@@ -254,6 +255,11 @@ def _finish(node_id, vertices, source_ids, faces, materials, origins, maps,
     if any(mat is None for mat in materials):
         diagnostics.append(Diagnostic("missing_material_id", "Some polygon face material IDs are absent",
                                       "warning", "0x0130"))
+    # Native MAX Multi/Sub face IDs are NOT zero-based Blender material slots.
+    # F3/F6 must provide and validate an explicit mapping before projecting F0.
+    diagnostics.append(Diagnostic("material_slot_mapping_unresolved",
+                                  "Native face material IDs need an explicit object-slot mapping",
+                                  "warning", "material.slots"))
     if mirrored_transform:
         diagnostics.append(Diagnostic("mirrored_transform_unapplied",
                                       "Geometry winding left unchanged; transform planner handles reflection",
@@ -321,9 +327,59 @@ def _finish(node_id, vertices, source_ids, faces, materials, origins, maps,
                       source_point_ids=source_ids)
     status = "partial" if diagnostics else "success"
     plan = GeometryPlan(node_id, len(vertices), len(faces), len(uv),
-                        tuple(materials) if all(i is not None for i in materials) else None,
-                        tuple(diagnostics))
+                        None, tuple(diagnostics))
     return Reconstruction(status, mesh, plan, tuple(diagnostics))
+
+
+
+def project_material_slots(result: Reconstruction, native_id_to_slot: Mapping[int, int] | None,
+                           *, slot_count: int) -> Reconstruction:
+    """Explicitly project raw MAX IDs to zero-based object material-slot indices.
+
+    F3/F6 must supply the *ordered* Blender material slots and an independently
+    verified complete native Multi/Sub ID -> slot map. No implicit ordinal,
+    identity, modulo, or missing-ID-to-slot-zero conversion is permitted.
+
+    Projection is all-or-nothing: missing native IDs, absent per-face IDs,
+    invalid slots or malformed mappings retain an unknown F0 projection.
+    Native IDs in MeshBuffer and face provenance are never changed.
+    """
+    if result.mesh is None:
+        return result
+
+    unresolved_codes = {
+        "material_slot_mapping_unresolved",
+        "material_slot_mapping_incomplete",
+        "invalid_material_slot_mapping",
+    }
+    retained = tuple(d for d in result.diagnostics if d.code not in unresolved_codes)
+
+    def unresolved(code: str, message: str) -> Reconstruction:
+        diag = Diagnostic(code, message, "warning", "material.slots")
+        diagnostics = retained + (diag,)
+        plan = replace(result.plan, face_material_indices=None, diagnostics=diagnostics)
+        return Reconstruction("partial", result.mesh, plan, diagnostics)
+
+    if (type(slot_count) is not int or not 0 <= slot_count <= 1024 or
+            native_id_to_slot is None or not isinstance(native_id_to_slot, Mapping)):
+        return unresolved("invalid_material_slot_mapping",
+                          "Explicit slot count (0..1024) and native-ID mapping required")
+
+    for native_id, slot in native_id_to_slot.items():
+        if (type(native_id) is not int or not 0 <= native_id <= 65535 or
+                type(slot) is not int or not 0 <= slot < slot_count):
+            return unresolved("invalid_material_slot_mapping",
+                              "Native IDs must be u16 and target slots must be in range")
+
+    ids = result.mesh.face_material_ids
+    if any(native_id is None or native_id not in native_id_to_slot for native_id in ids):
+        return unresolved("material_slot_mapping_incomplete",
+                          "Face lacks a native material ID or has no verified object-slot mapping")
+
+    slots = tuple(native_id_to_slot[native_id] for native_id in ids)
+    plan = replace(result.plan, face_material_indices=slots, diagnostics=retained)
+    return Reconstruction("partial" if retained else "success",
+                          result.mesh, plan, retained)
 
 
 def _failed(node_id: str, exc: _Invalid) -> Reconstruction:
@@ -373,4 +429,4 @@ def unsupported_geometry(node_id: str, kind: str) -> Reconstruction:
 
 __all__ = ["Limits", "PolyFaceChunk", "MapChunk", "FaceOrigin", "MapLayer", "MeshBuffer",
            "Reconstruction", "reconstruct_editable_mesh", "reconstruct_editable_poly",
-           "unsupported_geometry"]
+           "unsupported_geometry", "project_material_slots"]
