@@ -248,6 +248,10 @@ def plan_material(material_id: str, attributes: Mapping[str, object]) -> Materia
                                state, descriptor.get("use_alpha") is True)
         intents.append(intent)
         previous = slots[channel]
+        if previous is not None and previous["value"] is not None:
+            ds.append(_diag("scalar_map_mix_unimplemented",
+                            "Scalar/map mix amount is unknown; texture link overrides scalar",
+                            native_name[:128]))
         slots[channel] = {
             "value": previous["value"] if previous else None,
             "texture_id": intent.texture_id,
