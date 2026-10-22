@@ -271,5 +271,20 @@ class SceneNodesTests(unittest.TestCase):
         self.assertEqual(record["coverage"], "unsupported")
         self.assertIsNone(record["fps"])
 
+
+    def test_malformed_timebase_and_unit_enums_never_escape_v1(self):
+        t = track("A", "translation", [(2, (1, 2, 3))])
+        s = build_scene((node("A"),), timeline=Timeline("bad", 10, 25, EV), tracks=(t,))
+        self.assertEqual(s.status, "failed")
+        self.assertIn("invalid_frame_range", {d.code for d in s.diagnostics})
+        summary = manifest_animation_summaries(s)[0]
+        self.assertIsNone(summary["start_frame"])
+        self.assertEqual(summary["end_frame"], 10)
+        self.assertEqual(summary["coverage"], "unsupported")
+        light = build_scene((node("Light", "LIGHT", light=Light("POINT", intensity=1,
+                            intensity_unit="CUSTOM_UNKNOWN")),), timeline=Timeline(0, 24, 24, EV))
+        self.assertEqual(light.status, "partial")
+        self.assertIn("light_unit_unsupported", {d.code for d in light.diagnostics})
+
 if __name__ == "__main__":
     unittest.main()
