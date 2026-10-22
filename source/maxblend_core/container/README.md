@@ -8,7 +8,8 @@ wrappers and compressed native `Scene` streams are classified but deliberately
 
 ```python
 from maxblend_core.container import DefensiveContainerProbe, ProbeLimits
-report = DefensiveContainerProbe().probe_path(operator_approved_local_file)
+report = DefensiveContainerProbe().probe_path(
+    operator_approved_local_file, approved_root=operator_approved_absolute_root)
 # The caller MUST refuse all reports except status == 'partial' with
 # kind == 'max_cfb', and must not infer parsing, version or fidelity success.
 ```
@@ -17,14 +18,23 @@ report = DefensiveContainerProbe().probe_path(operator_approved_local_file)
 Wave 0 `ContainerProbe` protocol and returns the F0 `ContainerReport`. For
 more detailed metadata use `probe_detailed`, `probe_stream`, or `probe_path`.
 The report deliberately contains no private file paths or arbitrary stream names. The path-taking entry
-point does **not** authorize which files a caller may read; the UI/integrator
-must enforce its own file authorization and symlink/race policy.
+point does **not** authorize which files a caller may read: F6 must
+authorize `approved_root` and the exact chosen file. On POSIX the path helper
+rejects symlink components, parent traversal and nonregular targets using
+descriptor-relative no-follow opens, and requires an absolute approved root.
+On systems without secure descriptor-relative no-follow support it **fails
+closed**: F6 should supply an independently authorized, safely opened
+`probe_stream`. A later parser reopen is **not** bound to that descriptor;
+F6 must use the same verified bytes/descriptor (or controlled immutable copy)
+to prevent preflight-to-import TOCTOU. Comparing a pathname alone is insufficient.
 
 Default limits: 2 GiB input; 32,768 FAT sectors; 32,768 directory slots;
 2,000,000 sector-chain elements; 1 GiB per stream; 512 MiB cumulative read
 budget; 250,000 chunks; depth 48;
 4,000,000 deterministic inspection steps; 256 ZIP members; 512 MiB aggregate
-ZIP output metadata; 100:1 compression ratio. `max_input_bytes` is an
+ZIP output metadata; 100:1 compression ratio. ZIP members are **never inflated**,
+even to sniff signatures; a `.max` filename only suggests a candidate and
+the result is never import-eligible. All ZIP metadata reads are metered. `max_input_bytes` is an
 additional per-call ceiling (never expands the configured limit).
 For locally trusted *large* work, explicitly call
 `ProbeLimits().with_overrides(acknowledge_risk=True, ...)`. Do not raise
@@ -49,9 +59,12 @@ Important limitations:
   unknown payload semantics are opaque and may be legitimately unsupported.
 
 **F6 integration port:** At the existing `_dispatch_scene_import()` entrypoint
-in `source/import_max.py`, run preflight **before** constructing
-`ImportMaxFile`, and reject `failed`, `unsupported`, or any kind other than
-`max_cfb`. Convert diagnostics to safe UI messages (no source paths). Wire
+in `source/import_max.py`, authorize source selection, obtain a no-follow
+regular-file descriptor rooted in an approved directory, run preflight on
+that same descriptor **before** constructing `ImportMaxFile`, and reject
+`failed`, `unsupported`, or any kind other than `max_cfb`. Keep parser
+and probe attached to identical verified bytes (or an immutable,
+resource-bounded copy); a second path-based open reintroduces a TOCTOU race. Convert diagnostics to safe UI messages (no source paths). Wire
 `partial` as "preflight eligible" only; never as import success. This port
 change is reserved for F6 and is intentionally not made here.
 

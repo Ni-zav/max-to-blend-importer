@@ -254,5 +254,96 @@ class TestCompressionAndZip(unittest.TestCase):
         self.assertEqual(result.status, 'failed')
 
 
+
+
+class TestGate1FilesystemAndBudgets(unittest.TestCase):
+    """G1 negative tests use only synthetic fixture bytes and temporary files."""
+
+    def test_probe_path_requires_explicit_root(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            filename = os.path.join(root, "synthetic.max")
+            with open(filename, "wb") as fp:
+                fp.write(valid_cfb())
+            with self.assertRaises(ValueError):
+                DefensiveContainerProbe().probe_path(filename)
+            with self.assertRaises(ValueError):
+                DefensiveContainerProbe().probe_path(filename, approved_root=".")
+            with self.assertRaises(ValueError):
+                DefensiveContainerProbe().probe_path(
+                    filename, approved_root=os.path.join(root, "not-parent"))
+
+    @unittest.skipUnless(os.name == "posix" and hasattr(os, "O_NOFOLLOW"),
+                         "secure no-follow open requires POSIX")
+    def test_approved_regular_file_and_no_symlink_components(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            safe = os.path.join(root, "allowed")
+            os.mkdir(safe)
+            filename = os.path.join(safe, "synthetic.max")
+            with open(filename, "wb") as fp:
+                fp.write(valid_cfb())
+            result = DefensiveContainerProbe().probe_path(filename, approved_root=root)
+            self.assertEqual((result.kind, result.status), ("max_cfb", "partial"))
+            link = os.path.join(safe, "link.max")
+            os.symlink(filename, link)
+            with self.assertRaises(OSError):
+                DefensiveContainerProbe().probe_path(link, approved_root=root)
+            directory_link = os.path.join(root, "alias")
+            os.symlink(safe, directory_link)
+            with self.assertRaises(OSError):
+                DefensiveContainerProbe().probe_path(
+                    os.path.join(directory_link, "synthetic.max"), approved_root=root)
+            with self.assertRaises((OSError, UnsafeContainer)):
+                DefensiveContainerProbe().probe_path(safe, approved_root=root)
+
+    def test_interrupted_reader_sanitizes_diagnostic(self):
+        class Interrupted(io.BytesIO):
+            def read(self, n=-1):
+                raise InterruptedError("/secret/customer/source.max")
+        result = DefensiveContainerProbe().probe_stream(Interrupted(valid_cfb()))
+        self.assertEqual(result.status, "failed")
+        self.assertNotIn("customer", str(result.diagnostics))
+
+    def test_zip_member_remains_opaque(self):
+        from unittest import mock
+        archive = TestCompressionAndZip().zipfile_bytes(
+            [("filename_only.max", b"not a MAX header")])
+        with mock.patch.object(zipfile.ZipFile, "open",
+                               side_effect=AssertionError("must never inflate")):
+            result = DefensiveContainerProbe().probe_detailed(archive)
+        self.assertEqual((result.kind, result.status),
+                         ("zip_wrapped_candidate", "unsupported"))
+        self.assertIn("filename-level", result.diagnostics[0].message)
+
+    def test_zip_metadata_reads_charged(self):
+        archive = TestCompressionAndZip().zipfile_bytes(
+            [("metadata.max", b"not a valid MAX container")])
+        result = DefensiveContainerProbe().probe_detailed(archive)
+        self.assertEqual(result.status, "unsupported")
+        self.assertGreater(result.bytes_examined, len(archive))
+        tight = DefensiveContainerProbe(
+            ProbeLimits(max_bytes_examined=len(archive) + 8))
+        self.assertEqual(tight.probe_detailed(archive).status, "failed")
+
+    def test_chunk_many_siblings_both_budgets(self):
+        siblings = struct.pack("<Hi", 11, 6) * 100
+        for nodes, steps in ((90, 100), (150, 50)):
+            with self.subTest(nodes=nodes, steps=steps):
+                with self.assertRaises(UnsafeContainer):
+                    validate_chunks(lambda o,n: siblings[o:o+n], len(siblings),
+                                    max_nodes=nodes, max_depth=4, max_steps=steps)
+
+    def test_bad_alloc_id_and_budget_type(self):
+        data = bytearray(valid_cfb())
+        struct.pack_into("<I", data, 512+128+116, 0xFFFFFFFA)
+        self.assertEqual(DefensiveContainerProbe().probe_detailed(bytes(data)).status,
+                         "failed")
+        for kwargs in ({"max_bytes_examined": -1}, {"max_chunk_depth": 0},
+                       {"max_steps": False}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                ProbeLimits(**kwargs)
+
+
 if __name__ == '__main__':
     unittest.main()

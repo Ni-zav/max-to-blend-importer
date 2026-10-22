@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import io
 import os
+import stat
 import struct
 import zipfile
 from typing import BinaryIO
@@ -333,10 +334,14 @@ class _CFB:
                 if prefix[:2] == b"\x1f\x8b" or prefix[:2] in (b"\x78\x9c", b"\x78\xda"):
                     compressed = True
                 else:
-                    chunks += validate_chunks(read_at, length,
-                                              max_nodes=self.limits.max_chunk_nodes - chunks,
-                                              max_depth=self.limits.max_chunk_depth,
-                                              max_steps=self.limits.max_steps - self.budget.steps)
+                    # Chunk checks use deterministic steps; charge the SAME
+                    # inspection budget as FAT, directories and other streams.
+                    inspected = validate_chunks(read_at, length,
+                                                max_nodes=self.limits.max_chunk_nodes - chunks,
+                                                max_depth=self.limits.max_chunk_depth,
+                                                max_steps=self.limits.max_steps - self.budget.steps)
+                    chunks += inspected
+                    self.budget.spend(inspected)
         recognized = any(n.lower() == "scene" for n in names) and any(
             n.lower() in ("classdirectory3", "dlldirectory") for n in names)
         kind = "max_cfb" if recognized else "generic_cfb"
@@ -367,10 +372,50 @@ class DefensiveContainerProbe:
             raise TypeError("preflight expects bytes, not a file path")
         return self.probe_stream(io.BytesIO(data), max_input_bytes=max_input_bytes)
 
-    def probe_path(self, path: os.PathLike[str] | str, *, max_input_bytes: int | None = None) -> ProbeSummary:
-        # Open read-only, no extraction. Caller owns path authorization and TOCTOU policy.
-        with open(path, "rb") as fp:
-            return self.probe_stream(fp, max_input_bytes=max_input_bytes)
+    def probe_path(self, path: os.PathLike[str] | str, *,
+                   approved_root: os.PathLike[str] | str | None = None,
+                   max_input_bytes: int | None = None) -> ProbeSummary:
+        """Open a regular file beneath a caller-authorized root without symlinks.
+
+        This protects THIS preflight open, not a subsequent legacy parser reopen.
+        F6 must bind the parser to the same verified bytes/descriptor (or a
+        controlled immutable copy), and must authorize the root itself.
+        Non-POSIX runtimes should supply a safely opened `probe_stream`.
+        """
+        if approved_root is None:
+            raise ValueError("approved_root is required for path probing")
+        if os.name != "posix" or not all(hasattr(os, name) for name in
+                                        ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK")):
+            raise OSError("secure path open unavailable; use authorized probe_stream")
+        root, target = os.fspath(approved_root), os.fspath(path)
+        if not isinstance(root, str) or not isinstance(target, str):
+            raise TypeError("absolute string paths required")
+        if not os.path.isabs(root) or not os.path.isabs(target):
+            raise ValueError("absolute approved_root and target paths required")
+        if any(x == ".." for path_part in (root, target)
+               for x in path_part.split(os.sep)):
+            raise ValueError("parent traversal is forbidden")
+        root = os.path.normpath(root)
+        target = os.path.normpath(target)
+        if os.path.commonpath((root, target)) != root or target == root:
+            raise ValueError("path outside approved root")
+        root_parts = [part for part in root.split(os.sep) if part]
+        target_parts = [part for part in os.path.relpath(target, root).split(os.sep) if part]
+        fd = os.open(os.sep, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for part in root_parts + target_parts[:-1]:
+                next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                  dir_fd=fd)
+                os.close(fd)
+                fd = next_fd
+            file_fd = os.open(target_parts[-1],
+                              os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+            with os.fdopen(file_fd, "rb") as fp:
+                if not stat.S_ISREG(os.fstat(fp.fileno()).st_mode):
+                    raise UnsafeContainer("input is not a regular file")
+                return self.probe_stream(fp, max_input_bytes=max_input_bytes)
+        finally:
+            os.close(fd)
 
     def probe_stream(self, fp: BinaryIO, *, max_input_bytes: int | None = None) -> ProbeSummary:
         cap = self.limits.max_input_bytes
@@ -395,9 +440,11 @@ class DefensiveContainerProbe:
                 return self._inspect_zip(fp, budget)
             return ProbeSummary("unknown", "unsupported", budget.bytes_examined,
                 (Diagnostic("NOT_MAX_CONTAINER", "No CFB or ZIP signature", "warning", status="unsupported"),))
+        except MemoryError:
+            raise
         except Exception as exc:
             # No file paths, attacker-controlled names or private data in diagnostics.
-            # Never catch BaseException (including MemoryError, KeyboardInterrupt).
+            # MemoryError and BaseException (including KeyboardInterrupt) propagate.
             kind = ("malformed_cfb" if 'prefix' in locals() and prefix == MAGIC else
                     "malformed_zip" if 'prefix' in locals() and prefix[:2] == b"PK" else "unknown")
             return ProbeSummary(kind, "failed", budget.bytes_examined,
@@ -428,8 +475,34 @@ class DefensiveContainerProbe:
             raise UnsafeContainer("ZIP directory count/size budget exceeded")
         if cdir_at + cdir_size > length or offset + 22 + comment_size != len(tail):
             raise UnsafeContainer("malformed ZIP central-directory offsets")
+        # zipfile reads central-directory structures itself; meter every read
+        # against the SAME aggregate input budget as CFB and header probing.
+        class _MeteredFile:
+            def __init__(self, underlying):
+                self.fp = underlying
+
+            def read(self, n=-1):
+                # zipfile's EOCD reader calls read(-1) after seeking near EOF.
+                # Limit even that call to the remaining physical bytes.
+                if n < 0:
+                    n = length - self.fp.tell()
+                if n > budget.max_bytes - budget.bytes_examined:
+                    raise UnsafeContainer("ZIP metadata read budget exceeded")
+                raw = self.fp.read(n)
+                budget.bytes_examined += len(raw)
+                return raw
+
+            def seek(self, offset, whence=os.SEEK_SET):
+                return self.fp.seek(offset, whence)
+
+            def tell(self):
+                return self.fp.tell()
+
+            def seekable(self):
+                return True
+
         fp.seek(0)
-        with zipfile.ZipFile(fp, "r") as zf:
+        with zipfile.ZipFile(_MeteredFile(fp), "r") as zf:
             entries = zf.infolist()
             if len(entries) > self.limits.max_zip_entries:
                 raise UnsafeContainer("ZIP entry count exceeds budget")
@@ -450,15 +523,10 @@ class DefensiveContainerProbe:
                 if item.file_size and (item.compress_size == 0 or
                     item.file_size > item.compress_size * self.limits.max_decompression_ratio):
                     raise UnsafeContainer("ZIP expansion ratio exceeds budget")
-                if not item.is_dir() and name.lower().endswith(".max") and not candidate:
-                    # zipfile verifies paths through metadata only; never extract.
-                    # Short reads via ZipExtFile can still decompress significant data;
-                    # byte/ratio caps above bound exposure but do NOT prove safety.
-                    with zf.open(item) as member:
-                        candidate = candidate or member.read(8) == MAGIC
-                        budget.bytes_examined += min(8, item.file_size)
-                        if budget.bytes_examined > budget.max_bytes:
-                            raise UnsafeContainer("total bytes examined budget exceeded")
+                if not item.is_dir() and name.lower().endswith(".max"):
+                    # Filename metadata is only a weak candidate hint: NEVER
+                    # inflate even an eight-byte prefix of an untrusted member.
+                    candidate = True
             return ProbeSummary("zip_wrapped_candidate" if candidate else "zip_archive", "unsupported",
                 budget.bytes_examined,
-                (Diagnostic("ZIP_NOT_NATIVE_MAX", "ZIP wrapper is not supported by the native OLE reader; member never parsed as MAX", "warning", status="unsupported"),))
+                (Diagnostic("ZIP_NOT_NATIVE_MAX", "ZIP contains only filename-level MAX candidate evidence; member not opened or parsed", "warning", status="unsupported"),))
