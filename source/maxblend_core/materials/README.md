@@ -47,7 +47,9 @@ The source material name is not an identity key.
 
 The returned record matches the shape of the frozen interchange-v1 material
 schema. The seven core PBR slots are included. Extra native transmission/coat
-intent stays in the local plan (the wire schema has no such slots). Native
+intent stays in the local plan (the wire schema has no such slots);
+therefore P0 projection emits p0_extra_channel_loss and marks such records
+partial even if the Blender shader can reconstruct those local inputs. Native
 submaterial IDs remain in MaterialDetail; F2/F6 must map them to real ordered
 Blender material slots and material indices. The full manifest must be
 cross-reference-validated by P0/P6, including texture IDs and assignments.
@@ -120,3 +122,4 @@ schema validation does not validate scene cross-references; P6 owns that.
 Native Multi/Sub IDs (including gaps/nonzero IDs) remain diagnostic
 references, not zero-based Blender polygon indices. F2/F6 must construct
 the ordered slot map and map raw per-face native IDs to those indices.
+P0 v1 has no native coat/transmission slots; F3 reports p0_extra_channel_loss and partial coverage whenever these fields are decoded.
