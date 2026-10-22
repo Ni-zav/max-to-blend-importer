@@ -16,12 +16,13 @@ report = DefensiveContainerProbe().probe_path(operator_approved_local_file)
 `DefensiveContainerProbe().probe(data, max_input_bytes=N)` satisfies the
 Wave 0 `ContainerProbe` protocol and returns the F0 `ContainerReport`. For
 more detailed metadata use `probe_detailed`, `probe_stream`, or `probe_path`.
-The report deliberately contains no private file paths. The path-taking entry
+The report deliberately contains no private file paths or arbitrary stream names. The path-taking entry
 point does **not** authorize which files a caller may read; the UI/integrator
 must enforce its own file authorization and symlink/race policy.
 
 Default limits: 2 GiB input; 32,768 FAT sectors; 32,768 directory slots;
-2,000,000 sector-chain elements; 1 GiB per stream; 250,000 chunks; depth 48;
+2,000,000 sector-chain elements; 1 GiB per stream; 512 MiB cumulative read
+budget; 250,000 chunks; depth 48;
 4,000,000 deterministic inspection steps; 256 ZIP members; 512 MiB aggregate
 ZIP output metadata; 100:1 compression ratio. `max_input_bytes` is an
 additional per-call ceiling (never expands the configured limit).

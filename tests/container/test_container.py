@@ -154,6 +154,10 @@ class TestCFB(unittest.TestCase):
         r = self.diagnostic(valid_cfb(scene))
         self.assertEqual((r.kind, r.status), ('compressed_max_unsupported', 'unsupported'))
 
+    def test_read_budget(self):
+        r = DefensiveContainerProbe(ProbeLimits(max_bytes_examined=600)).probe_detailed(self.fixture)
+        self.assertEqual(r.status, 'failed')
+
     def test_cpu_directory_budget(self):
         r = DefensiveContainerProbe(ProbeLimits(max_steps=2)).probe_detailed(self.fixture)
         self.assertEqual(r.status, 'failed')

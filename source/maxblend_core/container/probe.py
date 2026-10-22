@@ -37,6 +37,7 @@ class ProbeLimits:
     max_dir_entries: int = 32768
     max_chain_sectors: int = 2_000_000
     max_stream_bytes: int = 1024**3
+    max_bytes_examined: int = 512 * 1024**2
     max_chunk_nodes: int = 250_000
     max_chunk_depth: int = 48
     max_steps: int = 4_000_000
@@ -70,8 +71,9 @@ class ProbeSummary:
 
 
 class _Budget:
-    def __init__(self, limit: int):
+    def __init__(self, limit: int, max_bytes: int):
         self.limit = limit
+        self.max_bytes = max_bytes
         self.steps = 0
         self.bytes_examined = 0
 
@@ -93,6 +95,8 @@ class _CFB:
         self.budget.spend()
         if at < 0 or size < 0 or at > self.size or size > self.size - at:
             raise UnsafeContainer("read outside CFB file")
+        if size > self.budget.max_bytes - self.budget.bytes_examined:
+            raise UnsafeContainer("total bytes examined budget exceeded")
         self.fp.seek(at)
         raw = self.fp.read(size)
         self.budget.bytes_examined += len(raw)
@@ -303,6 +307,8 @@ class _CFB:
                         root_at = sect[index]*64 + sub
                         root_idx, root_sub = divmod(root_at, self.sector_size)
                         take = min(n, 64-sub)
+                        if root_at + take > root_size:
+                            raise UnsafeContainer("mini stream references outside root storage")
                         out.extend(self.read((root_chain[root_idx]+1)*self.sector_size+root_sub, take))
                         at += take
                         n -= take
@@ -334,15 +340,18 @@ class _CFB:
         recognized = any(n.lower() == "scene" for n in names) and any(
             n.lower() in ("classdirectory3", "dlldirectory") for n in names)
         kind = "max_cfb" if recognized else "generic_cfb"
+        # Do not expose arbitrary client-authored stream names in reports.
+        safe_names = tuple(n for n in names if n.lower() in
+            ("scene", "classdirectory3", "dlldirectory", "config"))
         if compressed and recognized:
             return ProbeSummary("compressed_max_unsupported", "unsupported", self.budget.bytes_examined,
-                (Diagnostic("MAX_COMPRESSED_UNSUPPORTED", "Compressed Scene stream: legacy framing/version not independently verified; do not import", "warning", status="unsupported"),), major, None, tuple(names), None)
+                (Diagnostic("MAX_COMPRESSED_UNSUPPORTED", "Compressed Scene stream: legacy framing/version not independently verified; do not import", "warning", status="unsupported"),), major, None, safe_names, None)
         if not recognized:
             return ProbeSummary(kind, "unsupported", self.budget.bytes_examined,
-                (Diagnostic("NOT_CONFIRMED_MAX", "Valid CFB structure without required MAX stream evidence", "warning", status="unsupported"),), major, None, tuple(names), chunks)
+                (Diagnostic("NOT_CONFIRMED_MAX", "Valid CFB structure without required MAX stream evidence", "warning", status="unsupported"),), major, None, safe_names, chunks)
         return ProbeSummary(kind, "partial", self.budget.bytes_examined,
             (Diagnostic("MAX_PREFLIGHT_ONLY", "CFB/chunk bounds validated; MAX release and scene semantics unverified", "info"),),
-            major, None, tuple(names), chunks)
+            major, None, safe_names, chunks)
 
 
 class DefensiveContainerProbe:
@@ -369,7 +378,7 @@ class DefensiveContainerProbe:
             if type(max_input_bytes) is not int or max_input_bytes <= 0:
                 raise ValueError("max_input_bytes must be a positive integer")
             cap = min(cap, max_input_bytes)
-        budget = _Budget(self.limits.max_steps)
+        budget = _Budget(self.limits.max_steps, self.limits.max_bytes_examined)
         try:
             fp.seek(0, os.SEEK_END)
             size = fp.tell()
@@ -405,6 +414,8 @@ class DefensiveContainerProbe:
         fp.seek(length - tail_size)
         tail = fp.read(tail_size)
         budget.bytes_examined += len(tail)
+        if budget.bytes_examined > budget.max_bytes:
+            raise UnsafeContainer("total bytes examined budget exceeded")
         offset = tail.rfind(b"PK\x05\x06")
         if offset < 0 or len(tail) - offset < 22:
             raise UnsafeContainer("ZIP end-of-central-directory not found")
@@ -446,6 +457,8 @@ class DefensiveContainerProbe:
                     with zf.open(item) as member:
                         candidate = candidate or member.read(8) == MAGIC
                         budget.bytes_examined += min(8, item.file_size)
+                        if budget.bytes_examined > budget.max_bytes:
+                            raise UnsafeContainer("total bytes examined budget exceeded")
             return ProbeSummary("zip_wrapped_candidate" if candidate else "zip_archive", "unsupported",
                 budget.bytes_examined,
                 (Diagnostic("ZIP_NOT_NATIVE_MAX", "ZIP wrapper is not supported by the native OLE reader; member never parsed as MAX", "warning", status="unsupported"),))
