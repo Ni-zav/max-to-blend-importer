@@ -254,5 +254,22 @@ class SceneNodesTests(unittest.TestCase):
         self.assertEqual(unknown_fps.status, "partial")
         self.assertIn("fps_unknown", {d.code for d in unknown_fps.diagnostics})
 
+
+    def test_invalid_hierarchy_identifiers_and_unverified_animation_fps(self):
+        invalid = build_scene((NodeDetails(SceneNode(None, "Anonymous", "OTHER"), EV),),
+                              timeline=Timeline(0, 10, 24, EV))
+        self.assertEqual(invalid.status, "failed")
+        self.assertIn("invalid_node_id", {d.code for d in invalid.diagnostics})
+        self.assertEqual(invalid.diagnostics[0].evidence, EV.token())
+        t = track("A", "translation", [(0, (0, 0, 0))])
+        scene = build_scene((node("A"),), tracks=(t,), timeline=Timeline(0, 10, None, EV))
+        self.assertEqual(scene.status, "partial")
+        self.assertIn("animation_timebase_unverified", {d.code for d in scene.diagnostics})
+        record = manifest_animation_summaries(scene)[0]
+        self.assertEqual(record["supported_tracks"], [])
+        self.assertEqual(record["unsupported_tracks"], ["translation"])
+        self.assertEqual(record["coverage"], "unsupported")
+        self.assertIsNone(record["fps"])
+
 if __name__ == "__main__":
     unittest.main()
