@@ -15,10 +15,12 @@ SPDX:GPL-3.0-or-later; upstream attributions remain intact.
 - `python -m unittest discover -s tests/baseline -v`
 - `python tests/baseline/perf_probe.py` (header-only, no .max parser timing)
 - `blender --command extension build --source-dir=source --output-dir=dist`
+- `blender --command extension validate dist/io_scene_max-1.9.2.zip`
+- `blender --command extension install-file --repo YOUR_LOCAL_REPO dist/io_scene_max-1.9.2.zip` (after `repo-add`)
 - `blender --background --factory-startup --python tests/baseline/blender_smoke.py`
 
 CI uses official Blender 4.2.0 Linux binaries for extension build and
-headless registration smoke tests. The repository has no redistributable
+headless registration smoke tests, plus isolated offline extension ZIP installation. The repository has no redistributable
 legal native .max fixture, so full-scene import is **SKIPPED**, not passing.
 Do not substitute confidential client scenes for CI fixtures.
 
