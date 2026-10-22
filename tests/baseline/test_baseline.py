@@ -58,6 +58,8 @@ class UpstreamCompatibilityTests(unittest.TestCase):
         self.assertEqual(len(operators), 1)
         items = {node.targets[0].id for node in operators[0].body
                  if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
+        items.update(node.target.id for node in operators[0].body
+                     if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name))
         self.assertTrue({"bl_idname", "scale_objects", "use_image_search",
                          "object_filter", "use_collection", "use_apply_matrix"}.issubset(items))
         assert_id = next(node.value.value for node in operators[0].body
