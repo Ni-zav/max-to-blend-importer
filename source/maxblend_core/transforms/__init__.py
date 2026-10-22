@@ -251,7 +251,7 @@ class TransformEngine:
     data is never run through the axis/unit conversion twice. controller_format
     must be static and audited, not a script or time-varying controller.
     """
-    def __init__(self, axes: AxisConvention = AxisConvention(), *,
+    def __init__(self, axes: AxisConvention | None = None, *,
                  source_units: SourceUnits = SourceUnits(),
                  display: BlenderDisplay = BlenderDisplay(), max_depth: int = 256):
         if not isinstance(max_depth, int) or not (1 <= max_depth <= 10000):
@@ -268,6 +268,15 @@ class TransformEngine:
     def plan_scene(self, nodes: Sequence[SceneNode], *, source_units: SourceUnits | None = None) -> dict[str, TransformRecord]:
         units = source_units if source_units is not None else self.source_units
         ratio, unit_diags = units.resolve()
+        # An implicit canonical Blender axis map is not proof of source axes.
+        # F6 must supply an audited MAX mapping or an explicit operator choice.
+        axis_basis = None
+        if self.axes is not None:
+            try:
+                axis_basis = self.axes.basis()
+            except TransformError:
+                # Diagnostic is emitted for source-space nodes below.
+                pass
         lookup: dict[str, SceneNode] = {}
         for node in nodes:
             if not node.node_id or node.node_id in lookup:
@@ -316,6 +325,11 @@ class TransformEngine:
             offset = None
             normalized_offset = None
             diag = list(unit_diags) if space == "source" else []
+            if space == "source" and axis_basis is None:
+                diag.append(Diagnostic(
+                    "unknown_source_axes",
+                    "Source axis and handedness mapping requires evidence or operator selection",
+                    "error", status="unsupported"))
             raw = None
             if node.local_matrix is not None:
                 try:
@@ -335,7 +349,7 @@ class TransformEngine:
             except TransformError:
                 diag.append(Diagnostic("invalid_offset", "Geometry/pivot offset matrix invalid", "error", status="unsupported"))
             # Ratios are needed only for raw source-space matrices.
-            usable = raw is not None and (space == "normalized" or ratio is not None) and not any(
+            usable = raw is not None and (space == "normalized" or (ratio is not None and axis_basis is not None)) and not any(
                 d.status == "unsupported" for d in diag)
             if usable:
                 try:
@@ -367,7 +381,7 @@ class TransformEngine:
             geometry_world = multiply(world, normalized_offset) if world is not None and normalized_offset is not None else world
             plan = TransformPlan(local, world, ratio, tuple(diag))
             evidence = TransformEvidence(raw, offset, normalized_offset, str(space), ratio,
-                                         self.axes.basis() if ratio is not None else None,
+                                         axis_basis,
                                          world is not None and space == "source")
             result[node_id] = TransformRecord(plan, evidence, lp, wp, geometry_world)
         return {node.node_id: result[node.node_id] for node in nodes}
