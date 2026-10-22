@@ -67,8 +67,7 @@ class ImportMax(bpy.types.Operator, ImportHelper):
     )
     use_image_search: BoolProperty(
         name="Image Search",
-        description="Search subdirectories for any associated images "
-        "(Warning, may be slow)",
+        description="Legacy option retained for API compatibility; guarded F6 import never performs recursive image searches",
         default=True,
     )
     object_filter: EnumProperty(
@@ -118,10 +117,12 @@ def import_include(layout, operator):
     header.label(text="Include")
     if body:
         layrow = layout.row(align=True)
+        layrow.enabled = False  # Legacy option is API-compatible, but intentionally inactive in F6.
         layrow.prop(operator, "use_image_search")
         layrow.label(text="", icon='OUTLINER_OB_IMAGE' if operator.use_image_search else 'IMAGE_DATA')
         layout.column().prop(operator, "object_filter")
         layout.prop(operator, "approved_texture_root")
+        layout.label(text="Texture lookup is default-deny and never recursive", icon='INFO')
 
         layrow = layout.row(align=True)
         layrow.prop(operator, "use_collection")
