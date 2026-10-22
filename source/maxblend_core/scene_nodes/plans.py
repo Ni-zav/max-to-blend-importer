@@ -291,9 +291,11 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
     for item in nodes:
         base = planner.plan(item.node)
         detail_issues: list[Diagnostic] = [replace(d, evidence=item.evidence.token()) for d in base.diagnostics]
-        if item.node.node_id in by_id:
-            detail_issues.append(_diag("duplicate_node_id", "Duplicate scene id", item.evidence, error=True))
-        by_id[item.node.node_id] = item
+        if _valid_id(item.node.node_id):
+            if item.node.node_id in by_id:
+                detail_issues.append(_diag("duplicate_node_id", "Duplicate scene id", item.evidence, error=True))
+            else:
+                by_id[item.node.node_id] = item
         if item.camera and item.node.kind != "CAMERA":
             detail_issues.append(_diag("camera_type_mismatch", "Camera properties on non-camera", item.evidence, error=True))
         if item.light and item.node.kind != "LIGHT":
@@ -322,9 +324,11 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
             issues.append(_diag("invalid_layer", "Invalid layer id or name", layer.evidence, error=True))
         if layer.visible is not None and type(layer.visible) is not bool:
             issues.append(_diag("invalid_layer_visibility", "Layer visibility must be bool or unknown", layer.evidence, error=True))
-        if layer.layer_id in layer_by_id:
-            issues.append(_diag("duplicate_layer", "Duplicate layer id", layer.evidence, error=True))
-        layer_by_id[layer.layer_id] = layer
+        if _valid_id(layer.layer_id):
+            if layer.layer_id in layer_by_id:
+                issues.append(_diag("duplicate_layer", "Duplicate layer id", layer.evidence, error=True))
+            else:
+                layer_by_id[layer.layer_id] = layer
     for layer in layers:
         if layer.parent_layer_id is not None and layer.parent_layer_id not in layer_by_id:
             issues.append(_diag("layer_parent_missing", "Missing parent layer", layer.evidence, error=True))
@@ -343,7 +347,7 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
     ids = set(by_id)
     for item in nodes:
         parent = item.node.parent_id
-        if parent is not None and parent not in ids:
+        if parent is not None and (not _valid_id(parent) or parent not in ids):
             issues.append(_diag("parent_missing", "Missing parent object", item.evidence, error=True))
         if parent == item.node.node_id:
             issues.append(_diag("parent_self", "Scene node parents itself", item.evidence, error=True))
@@ -357,7 +361,8 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
                 issues.append(_diag("parent_cycle", "Cycle in scene hierarchy", by_id[current].evidence, error=True))
                 break
             path.add(current)
-            current = by_id[current].node.parent_id
+            parent = by_id[current].node.parent_id
+            current = parent if _valid_id(parent) else None
         visited.update(path)
     for item in nodes:
         for layer in item.layer_ids:
