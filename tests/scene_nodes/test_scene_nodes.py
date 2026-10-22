@@ -7,7 +7,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "source"))
-from maxblend_core.interfaces import SceneNode
+from maxblend_core.interfaces import SceneNode, SceneNodePlan, Diagnostic
 from maxblend_core.scene_nodes import (
     Camera, Evidence, Keyframe, Layer, Light, NodeDetails, NodePlanner, Timeline,
     TransformTrack, build_scene, class_hint, manifest_animation_summaries,
@@ -165,6 +165,94 @@ class SceneNodesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_scene((node("A"),) * 100001, timeline=Timeline(0, 1, 25, EV))
 
+
+
+    def test_f0_plan_and_diagnostic_type_provenance(self):
+        plan = NodePlanner().plan(SceneNode("Invalid ID", "safe", "OTHER"))
+        self.assertIsInstance(plan, SceneNodePlan)
+        self.assertIsInstance(plan.diagnostics[0], Diagnostic)
+        self.assertIsNone(plan.diagnostics[0].evidence)  # F0-only API has no source locator
+        scene = build_scene((NodeDetails(SceneNode("Invalid ID", "safe", "OTHER"), EV),),
+                            timeline=Timeline(0, 10, 25, EV))
+        d = next(d for d in scene.diagnostics if d.code == "invalid_node_id")
+        self.assertIsInstance(scene.nodes[0], SceneNodePlan)
+        self.assertEqual(d.evidence, EV.token())
+        self.assertEqual(d.status, "failed")
+        self.assertNotIn("/", d.evidence)
+
+    def test_camera_explicit_target_requires_existing_node(self):
+        missing = build_scene((node("Cam", "CAMERA",
+                                    camera=Camera("PERSPECTIVE", focal_length_mm=50, target_id="Target")),),
+                              timeline=Timeline(0, 30, 30, EV))
+        self.assertEqual(missing.status, "failed")
+        self.assertIn("camera_target_missing", {d.code for d in missing.diagnostics})
+        valid = build_scene((node("Cam", "CAMERA",
+                                  camera=Camera("PERSPECTIVE", focal_length_mm=50, target_id="Target")),
+                             node("Target", "EMPTY")), timeline=Timeline(0, 30, 30, EV))
+        self.assertEqual(valid.status, "success")
+        unknown = build_scene((node("Cam", "CAMERA",
+                                    camera=Camera("PERSPECTIVE", focal_length_mm=50)),),
+                              timeline=Timeline(0, 30, 30, EV))
+        self.assertEqual(unknown.status, "success")
+        self.assertIsNone(unknown.details[0].camera.target_id)
+
+    def test_camera_invalid_lens_filmback_and_unknown_projection(self):
+        cases = (
+            (Camera("PERSPECTIVE", focal_length_mm=-1), "invalid_camera_parameter", "failed"),
+            (Camera("PERSPECTIVE", focal_length_mm=50, filmback_width_mm=0), "invalid_camera_parameter", "failed"),
+            (Camera("PERSPECTIVE", focal_length_mm=50, shift_x=float("nan")), "invalid_camera_shift", "failed"),
+            (Camera("UNKNOWN"), "camera_projection_unknown", "partial"),
+            (Camera("ORTHOGRAPHIC"), "camera_ortho_size_missing", "partial"),
+            (Camera("PERSPECTIVE", focal_length_mm=50, target_id="../leak"), "invalid_camera_target_id", "failed"),
+        )
+        for cam, code, status in cases:
+            with self.subTest(code=code):
+                result = build_scene((node("Cam", "CAMERA", camera=cam),),
+                                     timeline=Timeline(0, 24, 24, EV))
+                self.assertEqual(result.status, status)
+                self.assertIn(code, {d.code for d in result.diagnostics})
+
+    def test_unknown_unverified_values_remain_unset(self):
+        scene = build_scene((node("Cam", "CAMERA", camera=Camera()),
+                             node("Light", "LIGHT", light=Light())),
+                            timeline=Timeline())
+        self.assertEqual(scene.status, "partial")
+        self.assertIsNone(scene.timeline.fps)
+        self.assertIsNone(scene.timeline.start_frame)
+        self.assertIsNone(scene.details[0].camera.horizontal_fov_rad)
+        self.assertIsNone(scene.details[1].light.intensity)
+        self.assertIn("fps_unknown", {d.code for d in scene.diagnostics})
+        self.assertIn("light_kind_unsupported", {d.code for d in scene.diagnostics})
+
+    def test_nonfinite_and_malformed_inputs_do_not_crash(self):
+        malformed = NodePlanner().plan(SceneNode("Node", "Node", "MESH",
+                             local_matrix=((1, 0),)))
+        self.assertIn("invalid_local_matrix", {d.code for d in malformed.diagnostics})
+        result = NodePlanner().plan(SceneNode(None, "Node", "MESH"))
+        self.assertIn("invalid_node_id", {d.code for d in result.diagnostics})
+        broken = track("A", "translation", [(0, (0, 0, 0)), (5, (float("nan"), 0, 0))])
+        s = build_scene((node("A"),), tracks=(broken,), timeline=Timeline(0, 10, 25, EV))
+        self.assertEqual(s.status, "failed")
+        self.assertIn("invalid_animation_keys", {d.code for d in s.diagnostics})
+
+    def test_controller_interpolation_and_timebase_no_overclaim(self):
+        for t in (
+            track("A", "translation", [(0, (0, 0, 0))], interpolation="LINEAR",
+                  interpolation_verified=False),
+            track("A", "translation", [(0, (0, 0, 0))], interpolation="BEZIER"),
+            track("A", "translation", [(0, (0, 0, 0))], controller_supported=False),
+        ):
+            with self.subTest(t=t.interpolation):
+                s = build_scene((node("A"),), tracks=(t,),
+                                timeline=Timeline(0, 20, 25, EV))
+                self.assertEqual(s.status, "partial")
+                self.assertTrue(set(d.code for d in s.diagnostics) &
+                                {"interpolation_unverified", "unsupported_controller"})
+                self.assertEqual(manifest_animation_summaries(s)[0]["coverage"], "unsupported")
+        unknown_fps = build_scene((node("A"),),
+                                  timeline=Timeline(0, 20, None, EV))
+        self.assertEqual(unknown_fps.status, "partial")
+        self.assertIn("fps_unknown", {d.code for d in unknown_fps.diagnostics})
 
 if __name__ == "__main__":
     unittest.main()
