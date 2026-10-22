@@ -3,6 +3,7 @@
 """Wave 1 F4: offline, Blender-independent texture lookup and graph intent."""
 from .graph import BitmapSource, TextureGraphResult, extract_bitmap_sources, resolve_graph
 from .resolver import ResolutionDetail, SafeTextureResolver, classify_channel
+from .projection import project_texture_v1
 
 __all__ = ["BitmapSource", "TextureGraphResult", "ResolutionDetail", "SafeTextureResolver",
-           "classify_channel", "extract_bitmap_sources", "resolve_graph"]
+           "classify_channel", "extract_bitmap_sources", "resolve_graph", "project_texture_v1"]
