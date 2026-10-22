@@ -139,7 +139,7 @@ class MatrixTests(unittest.TestCase):
         r = TransformEngine(axes=AxisConvention(), source_units=SourceUnits("m")).plan_scene([y, b, x, a])
         self.assertEqual(bake_points(mesh, r["x"].plan.world_matrix)[0], (3., 0., 0.))
         self.assertEqual(bake_points(mesh, r["y"].plan.world_matrix)[0], (-4., 0., 0.))
-        self.assertEqual(mesh, ((0, 0, 0), (1, 0, 0),)))
+        self.assertEqual(mesh, ((0, 0, 0), (1, 0, 0)))
 
     def test_bbox_invariants_and_empty(self):
         corners = [(x, y, z) for x in (-1, 1) for y in (-2, 2) for z in (-3, 3)]
