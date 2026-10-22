@@ -41,12 +41,16 @@ def as_manifest_material(detail: MaterialDetail) -> dict[str, object]:
         }
         for diagnostic in detail.plan.diagnostics
     ]
+    pbr = detail.manifest_pbr()
+    for key, record in pbr.items():
+        if record is not None and isinstance(record["value"], tuple):
+            pbr[key] = {**record, "value": list(record["value"])}
     return {
         "id": detail.plan.material_id,
         "original_class": detail.plan.original_class,
         "renderer": detail.plan.renderer,
         "assignment_ids": list(detail.assignment_ids),
-        "pbr": detail.manifest_pbr(),
+        "pbr": pbr,
         "unknown_parameters": [
             _unknown_entry(key, value) for key, value in detail.unknown_parameters[:1000]
         ],
