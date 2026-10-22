@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Temporary G1-only verification: do not merge this aggregated PR.
+name: gate1-isolated-fork-verification
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install frozen JSON schema validator for strict fixture checks
+        run: python -m pip install jsonschema==4.23.0
+      - name: G1 independent regression suites (continue through failures; fail job if any failed)
+        shell: bash
+        run: |
+          set +e
+          bad=0
+          python -m compileall -q source tests || bad=1
+          for suite in baseline transforms geometry materials textures container scene_nodes instances; do
+            echo "==== G1 suite: $suite ===="
+            PYTHONPATH=source python -m unittest discover -s "tests/$suite" -p 'test_*.py' -v || bad=1
+          done
+          exit "$bad"
+  blender-materials:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Obtain checksum-validated official Blender 4.2 for synthetic node-only smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://download.blender.org/release/Blender4.2
+          curl --fail --location --retry 3 --silent --show-error "$base/blender-4.2.0-linux-x64.tar.xz" -o blender.tar.xz
+          curl --fail --location --retry 3 --silent --show-error "$base/blender-4.2.0.sha256" -o blender.sha256
+          grep 'blender-4.2.0-linux-x64.tar.xz' blender.sha256 | sed 's#blender-4.2.0-linux-x64.tar.xz#blender.tar.xz#' | sha256sum --check -
+          tar -xf blender.tar.xz
+          echo "$PWD/blender-4.2.0-linux-x64" >> "$GITHUB_PATH"
+      - name: Real Blender 4.2 F3 nodes, synthetic in-memory images
+        run: blender --background --factory-startup --disable-autoexec --python tests/materials/blender_smoke.py
