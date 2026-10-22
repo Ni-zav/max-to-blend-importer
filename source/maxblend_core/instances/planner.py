@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
@@ -179,6 +179,7 @@ class InstanceGraphPlanner:
         indexed: dict[str, InstanceInput] = {}
         objects: list[ObjectInstance] = []
         geometry: dict[str, GeometryResource] = {}
+        seen_native_ids: set[str] = set()
 
         def warn(code: str, reason: str, *, evidence: str | None = None,
                  error: bool = False) -> None:
@@ -214,16 +215,22 @@ class InstanceGraphPlanner:
             if not _matrix_ok(node.local_matrix) or not _matrix_ok(item.world_matrix):
                 warn("INVALID_MATRIX", "Nonfinite or malformed matrix; never place at origin", error=True)
             if node.local_matrix is None and item.world_matrix is None:
-                warn("PLACEMENT_UNRESOLVED", "No evidenced local or world transform")
-            elif node.parent_id is not None and item.world_matrix is None:
-                warn("WORLD_UNRESOLVED", "F1 world placement not supplied; no origin fallback")
+                warn("PLACEMENT_UNRESOLVED", "No evidenced local or world transform",
+                     error=role in ("mesh", "instance"))
+            elif item.world_matrix is None and role in ("mesh", "instance"):
+                warn("WORLD_UNRESOLVED", "F1 world placement not supplied; no origin fallback",
+                     error=True)
             if node.parent_id is not None and not _valid_id(node.parent_id):
                 warn("INVALID_PARENT_ID", "Parent identifier is invalid", error=True)
             if item.source_node_id is not None and not _valid_id(item.source_node_id):
                 warn("INVALID_SOURCE_ID", "Reference identifier is invalid", error=True)
-            if item.native_id is not None and (not isinstance(item.native_id, str) or
-                                                len(item.native_id) > 128):
-                warn("INVALID_NATIVE_ID", "Native identifier exceeds bound", error=True)
+            if item.native_id is not None:
+                if not isinstance(item.native_id, str) or not _valid_id(item.native_id):
+                    warn("INVALID_NATIVE_ID", "Native identifier is not a safe source ID", error=True)
+                elif item.native_id in seen_native_ids:
+                    warn("DUPLICATE_NATIVE_ID", "Duplicate native object identifier", error=True)
+                else:
+                    seen_native_ids.add(item.native_id)
             if len(node.name) > 256:
                 warn("NAME_LIMIT", "Object name exceeds bound", error=True)
             if not isinstance(item.material_ids, tuple) or len(item.material_ids) > limits.max_materials_per_object:
@@ -247,7 +254,7 @@ class InstanceGraphPlanner:
             if role in ("group", "empty", "xref", "proxy", "other") and item.geometry_id is not None:
                 warn("UNSUPPORTED_GEOMETRY", "Nonmesh component cannot supply direct mesh", error=True)
             if role == "mesh" and item.geometry_id is None:
-                warn("GEOMETRY_UNRESOLVED", "Mesh has no evidenced geometry source")
+                warn("GEOMETRY_UNRESOLVED", "Mesh has no evidenced geometry source", error=True)
             if role == "instance" and item.source_node_id is None and item.geometry_id is None:
                 warn("INSTANCE_UNRESOLVED", "Instance has no source node or geometry key")
             if role == "other":
@@ -279,50 +286,45 @@ class InstanceGraphPlanner:
                 item.source_node_id, item.geometry_id, node.local_matrix, item.world_matrix,
                 item.material_ids, item.material_overrides, safe_ref, state))
 
-        # Check both parent and instance-reference edges without recursive DFS.
-        # Finished children follow their dependencies, allowing linear resolution.
-        color: dict[str, int] = {}
+        # Topological walk over *both* parent and source edges. Dedupe edges
+        # so a parent/source referring to the same node is not a false cycle.
+        # Iterative Kahn ordering avoids recursion and repeated DFS visits
+        # on deep converging DAGs (O(objects + references)).
+        successors: dict[str, list[str]] = {key: [] for key in indexed}
+        in_degree: dict[str, int] = {}
+        dependencies: dict[str, tuple[str, ...]] = {}
+        for key, item in indexed.items():
+            distinct = tuple(dict.fromkeys(
+                dep for dep in (item.node.parent_id, item.source_node_id)
+                if dep is not None
+            ))
+            available: list[str] = []
+            for dep in distinct:
+                if dep not in indexed:
+                    warn("REFERENCE_MISSING", "Parent or source reference is absent", error=True)
+                else:
+                    available.append(dep)
+                    successors[dep].append(key)
+            dependencies[key] = tuple(available)
+            in_degree[key] = len(available)
+        ready = deque(key for key, degree in in_degree.items() if degree == 0)
         finish: list[str] = []
-        for root in indexed:
-            if color.get(root) == 2:
-                continue
-            stack = [(root, False, 1)]
-            while stack:
-                key, exiting, depth = stack.pop()
-                if exiting:
-                    color[key] = 2
-                    finish.append(key)
-                    continue
-                if color.get(key) == 2:
-                    continue
-                if color.get(key) == 1:
-                    warn("REFERENCE_CYCLE", "Cyclic group/instance/parent reference", error=True)
-                    continue
-                if depth > limits.max_depth:
-                    warn("GRAPH_DEPTH", "Group/reference nesting exceeds bound", error=True)
-                    continue
-                color[key] = 1
-                stack.append((key, True, depth))
-                it = indexed[key]
-                for target in (it.node.parent_id, it.source_node_id):
-                    if target is None:
-                        continue
-                    if target not in indexed:
-                        warn("REFERENCE_MISSING", "Linked source or parent is missing")
-                    else:
-                        stack.append((target, False, depth + 1))
-
-        # Detect long chains even when nodes are presented parent-first and
-        # DFS sees their dependencies already complete (dynamic longest path).
         graph_depth: dict[str, int] = {}
-        for key in finish:
-            it = indexed[key]
-            predecessors = (it.node.parent_id, it.source_node_id)
-            depth = 1 + max((graph_depth.get(dep, 0) for dep in predecessors
-                             if dep is not None), default=0)
+        while ready:
+            key = ready.popleft()
+            finish.append(key)
+            depth = 1 + max((graph_depth[dep] for dep in dependencies[key]), default=0)
             graph_depth[key] = depth
             if depth > limits.max_depth:
                 warn("GRAPH_DEPTH", "Group/reference chain exceeds configured depth", error=True)
+            for child in successors[key]:
+                in_degree[child] -= 1
+                if in_degree[child] == 0:
+                    ready.append(child)
+        if len(finish) != len(indexed):
+            # Block all materialization on cycles, including downstream nodes.
+            counts["graph_blocked_nodes"] = len(indexed) - len(finish)
+            warn("REFERENCE_CYCLE", "Parent/source graph contains a dependency cycle", error=True)
 
         # Do not expand instance chains. A resolved instance points at the
         # original GeometryResource key; the object itself owns its materials.
@@ -338,7 +340,7 @@ class InstanceGraphPlanner:
                     resolved = inherited
             effective[key] = resolved
             if item.role == "instance" and resolved is None:
-                warn("INSTANCE_UNRESOLVED", "Reference chain has no geometry")
+                warn("INSTANCE_UNRESOLVED", "Reference chain has no geometry", error=True)
 
         objects = [ObjectInstance(
             ob.id, ob.native_id, ob.name, ob.role, ob.parent_id,
@@ -360,18 +362,20 @@ class InstanceGraphPlanner:
             status = "unsupported"
         elif any(code not in ("objects", "geometry_resources", "geometry_references",
                               "external_objects", "unresolved_geometry_objects",
-                              "shared_geometry_resources") for code in counts):
+                              "shared_geometry_resources", "graph_blocked_nodes") for code in counts):
             status = "partial"
         else:
             status = "success"
         if len(diagnostics) == limits.max_diagnostics and sum(
             n for code, n in counts.items() if code not in (
                 "objects", "geometry_resources", "geometry_references", "external_objects",
-                "unresolved_geometry_objects", "shared_geometry_resources")) > len(diagnostics):
+                "unresolved_geometry_objects", "shared_geometry_resources",
+                "graph_blocked_nodes")) > len(diagnostics):
             counts["diagnostics_suppressed"] = sum(
                 n for code, n in counts.items() if code not in (
                     "objects", "geometry_resources", "geometry_references", "external_objects",
-                    "unresolved_geometry_objects", "shared_geometry_resources")) - len(diagnostics)
+                    "unresolved_geometry_objects", "shared_geometry_resources",
+                    "graph_blocked_nodes")) - len(diagnostics)
         return InstanceReport(status, tuple(objects), tuple(geometry.values()),
                               tuple(diagnostics), tuple(sorted(counts.items())), limited)
 
