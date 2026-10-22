@@ -4,7 +4,8 @@
 
 Never serialize ``resolved_path``/``tile_paths`` or log exception strings:
 these are confidential local filesystem capabilities, not manifest fields.
-The public ``manifest_record`` is deliberately narrower.
+``manifest_record`` is INTERNAL-ONLY and is not a P0 scene/v1 record.
+Use ``project_texture_v1`` for the exact P0 wire shape; do not log it publicly.
 """
 from __future__ import annotations
 
@@ -128,13 +129,17 @@ class ResolutionDetail:
     def contract_resolution(self) -> TextureResolution:
         return TextureResolution(self.state, self.resolved_path, self.diagnostics)
 
-    def manifest_record(self) -> dict[str, object]:
-        # May be written locally to a manifest, but should not be published as a
-        # diagnostic log when filenames are themselves confidential.
+    def internal_diagnostic_record(self) -> dict[str, object]:
+        """Local F4 investigation record, NOT the P0 schema or a public log."""
+        # Filenames and hashes can themselves be private project metadata.
         return {"reference": self.reference, "path_state": self.state,
                 "channel": self.channel, "color_space_role": self.color_space_role,
                 "sha256": self.sha256, "udim_tiles": [{"tile": t, "sha256": digest} for t, digest in self.tile_hashes],
                 "warnings": [d.code for d in self.diagnostics]}
+
+    def manifest_record(self) -> dict[str, object]:
+        """Compatibility alias: INTERNAL-ONLY; never treat as P0 v1 JSON."""
+        return self.internal_diagnostic_record()
 
 
 class SafeTextureResolver:
