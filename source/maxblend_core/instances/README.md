@@ -37,8 +37,11 @@ Autodesk, networking or filesystem calls are made by this module.
    scene-index to chunk mapping.
 2. Run InstanceGraphPlanner().plan_scene(inputs) **before** Blender object
    creation. Refuse materialization when status == "failed" or truncated.
-   For partial/unsupported objects, keep meaningful, visible diagnostics; never
-   silently replace an unresolved geometry or proxy with an empty mesh.
+   Missing parent/source references, geometry-bearing objects without an
+   evidenced F1 world transform, incompatible geometry identities, cycles, and
+   excessive depth are hard failures. For partial/unsupported objects, keep
+   meaningful, visible diagnostics; never silently replace an unresolved
+   geometry or proxy with an empty mesh.
 3. Map each GeometryResource.geometry_id to one Blender mesh datablock. Each
    ObjectInstance becomes its own Blender object; source_node_id is *not*
    recursively expanded. Use per-object material slots when possible; use
@@ -58,8 +61,24 @@ Autodesk, networking or filesystem calls are made by this module.
 Run: python -m unittest discover -s tests/instances -v
 
 Synthetic hierarchies, 1/N geometry identity, nested instances, independent
-transforms, materials, missing proxies/blocked paths, cycles, deep graphs,
-duplicate names, a 12,000-object memory bound and deterministic caps. These
+transforms (including negative determinant and nonuniform scale), per-object
+material overrides, missing proxies/blocked paths, repeated names with distinct
+IDs, native-ID collisions, missing parents, malformed references, cycles,
+wide/deep graphs, a 12,000-object memory bound and deterministic caps. These
 tests do **not** exercise Blender or import real MAX. F0 baseline CI currently
 does not discover this subtree; G1/F6 should wire full-suite CI under shared
 file authority.
+
+G1 requests three exact commands on an actual checkout:
+
+```sh
+PYTHONPATH=source python -m unittest discover -s tests/instances -v
+python -m compileall -q source/maxblend_core/instances tests/instances
+PYTHONPATH=source python -m unittest discover -s tests/baseline -v
+```
+
+Do not substitute the Wave 0 baseline green check for an execution of the
+F8 suite. This worker does not edit root workflows or platform schemas.
+Real Blender registration smoke in baseline CI does not establish that F8 is
+wired into actual .max scene import; renderer proxy decoding and Blender
+datablock sharing remain F6 integration tasks.
