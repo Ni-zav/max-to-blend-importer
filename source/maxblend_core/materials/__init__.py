@@ -259,8 +259,10 @@ def plan_material(material_id: str, attributes: Mapping[str, object]) -> Materia
         slots[channel] = {
             "value": previous["value"] if previous else None,
             "texture_id": intent.texture_id,
-            "provenance": previous["provenance"] if previous else
-                          {"method": "native", "evidence": native_name[:128]},
+            "provenance": ({"method": "derived", "evidence": ("1 - " + native_name)[:128]}
+                           if intent.transform == "invert" else
+                           previous["provenance"] if previous else
+                           {"method": "native", "evidence": native_name[:128]}),
         }
 
     submaterial_ids: list[tuple[int, str]] = []
@@ -303,6 +305,9 @@ def plan_material(material_id: str, attributes: Mapping[str, object]) -> Materia
         ds.append(_diag("unmapped_parameter", "Native property has no verified mapping", key))
     if len(unknown) > 64:
         ds.append(_diag("unmapped_parameter_count", "Additional unmapped properties recorded"))
+    if slots["transmission"] is not None or slots["coat"] is not None:
+        ds.append(_diag("p0_extra_channel_loss",
+                        "Coat/transmission retained locally but have no native P0 v1 PBR field"))
     if intents and not any(d.code == "unresolved_texture" for d in ds):
         ds.append(_diag("shader_links_unverified",
                         "Decoded bitmap references are not proof of real Blender node links"))
