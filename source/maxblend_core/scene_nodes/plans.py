@@ -244,6 +244,10 @@ def _track_issues(track: TransformTrack, ids: set[str], timeline: Timeline) -> l
         issues.append(_diag("unsupported_controller", "Controller/channel is not supported", ev))
     if not track.keys:
         issues.append(_diag("animation_source_missing", "No decoded animation keys/samples", ev))
+    if track.mode not in {"KEYED", "SAMPLED"}:
+        issues.append(_diag("animation_mode_unsupported", "Unknown key/sample semantics", ev))
+    if timeline.fps is None or not _positive(timeline.fps) or timeline.fps > 1000:
+        issues.append(_diag("animation_timebase_unverified", "Cannot time animation without verified FPS", ev))
     if track.normalized_values is not True:
         issues.append(_diag("animation_axes_unverified", "F1 normalized axes/metres not verified", ev))
     if track.interpolation not in {"UNKNOWN", "LINEAR", "CONSTANT"} or (track.interpolation != "UNKNOWN" and track.interpolation_verified is not True):
@@ -387,7 +391,10 @@ def manifest_animation_summaries(plan: ScenePlan) -> list[dict[str, object]]:
         issues = _track_issues(track, {x.node.node_id for x in plan.details}, plan.timeline)
         supported = (track.channel in _SUPPORTED and track.controller_supported and
                      bool(track.keys) and track.normalized_values is True and
-                     track.target_id is not None and not issues)
+                     track.target_id is not None and not issues and
+                     plan.timeline.start_frame is not None and plan.timeline.end_frame is not None and
+                     type(plan.timeline.start_frame) is int and type(plan.timeline.end_frame) is int and
+                     plan.timeline.start_frame <= plan.timeline.end_frame)
         warnings = [
             {"code": d.code, "severity": d.severity, "reason": d.message,
              "evidence": d.evidence, "attribute": track.channel[:128],
@@ -401,7 +408,7 @@ def manifest_animation_summaries(plan: ScenePlan) -> list[dict[str, object]]:
         summaries.append({
             "id": f"Animation{index}", "target_object_id": track.target_id if _valid_id(track.target_id) else None,
             "start_frame": plan.timeline.start_frame, "end_frame": plan.timeline.end_frame,
-            "fps": plan.timeline.fps if _positive(plan.timeline.fps) else None,
+            "fps": plan.timeline.fps if _positive(plan.timeline.fps) and plan.timeline.fps <= 1000 else None,
             "supported_tracks": [track.channel] if supported else [],
             "unsupported_tracks": [] if supported else [track.channel[:80]],
             "coverage": "partial" if supported else "unsupported",
