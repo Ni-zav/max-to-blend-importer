@@ -7,7 +7,7 @@ import tracemalloc
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "source"))
-from maxblend_core.interfaces import SceneNode  # noqa: E402
+from maxblend_core.interfaces import InstancePlan, SceneNode  # noqa: E402
 from maxblend_core.instances import InstanceGraphPlanner, InstanceInput, Limits  # noqa: E402
 
 IDENTITY = ((1.0, 0., 0., 0.), (0., 1., 0., 0.),
@@ -78,7 +78,7 @@ class InstanceTests(unittest.TestCase):
     def test_child_world_unknown_is_not_invented(self):
         r = self.plan([item("Group", "group"),
                        item("Child", parent="Group", geo="G", world=None)])
-        self.assertEqual(r.status, "partial")
+        self.assertEqual(r.status, "failed")
         self.assertIsNone(r.objects[1].world_matrix)
         self.assertEqual(r.count("WORLD_UNRESOLVED"), 1)
 
@@ -126,7 +126,7 @@ class InstanceTests(unittest.TestCase):
 
     def test_missing_reference_and_geometry_unknown_not_zero(self):
         r = self.plan([item("X", "instance", source="Gone")])
-        self.assertEqual(r.status, "partial")
+        self.assertEqual(r.status, "failed")
         self.assertIsNone(r.objects[0].geometry_id)
         self.assertGreater(r.count("REFERENCE_MISSING"), 0)
 
@@ -167,6 +167,99 @@ class InstanceTests(unittest.TestCase):
         self.assertEqual(r.status, "success")
         self.assertEqual(len(r.geometries), 1)
         self.assertLess(peak, 40_000_000)  # deterministic synthetic budget, not MAX memory
+
+
+    def test_source_ids_survive_duplicate_names_and_explicit_provenance(self):
+        from dataclasses import replace
+        first = replace(item("Node01", geo="Geometry01", vertices=8),
+                        native_id="Native01")
+        second = replace(item("Node02", "instance", source="Node01"),
+                         native_id="Native02")
+        r = self.plan([first, second])
+        self.assertEqual(r.status, "success")
+        self.assertEqual(tuple(x.id for x in r.objects), ("Node01", "Node02"))
+        self.assertEqual(tuple(x.native_id for x in r.objects), ("Native01", "Native02"))
+        self.assertEqual(tuple(x.name for x in r.objects), ("Repeated", "Repeated"))
+        self.assertEqual(len(r.geometries), 1)
+        self.assertEqual(r.geometries[0].owner_node_id, "Node01")
+        self.assertEqual(r.geometries[0].geometry_id, "Geometry01")
+
+    def test_duplicate_native_source_id_is_fatal(self):
+        from dataclasses import replace
+        r = self.plan([replace(item("A", geo="G"), native_id="Native"),
+                       replace(item("B", geo="G"), native_id="Native")])
+        self.assertEqual(r.status, "failed")
+        self.assertEqual(r.count("DUPLICATE_NATIVE_ID"), 1)
+
+    def test_missing_parent_is_fatal(self):
+        r = self.plan([item("Child", parent="UnknownParent", geo="G")])
+        self.assertEqual(r.status, "failed")
+        self.assertEqual(r.count("REFERENCE_MISSING"), 1)
+
+    def test_reference_and_parent_same_node_is_not_false_cycle(self):
+        r = self.plan([item("Source", geo="SharedG"),
+                       item("Copy", "instance", source="Source", parent="Source")])
+        self.assertEqual(r.status, "success")
+        self.assertEqual(r.count("REFERENCE_CYCLE"), 0)
+        self.assertEqual(r.objects[1].geometry_id, "SharedG")
+
+    def test_missing_root_world_matrix_is_fatal_without_origin_default(self):
+        r = self.plan([item("A", geo="G", world=None)])
+        self.assertEqual(r.status, "failed")
+        self.assertIsNone(r.objects[0].world_matrix)
+        self.assertEqual(r.count("WORLD_UNRESOLVED"), 1)
+
+    def test_mirrored_nonuniform_nested_transform_evidence_preserved(self):
+        # F1 provides and validates these exact matrices; F8 must not compose
+        # or re-normalize them. Negative determinant is intentionally retained.
+        nonuniform = ((2., 0., 0., 9.), (0., -3., 0., -4.),
+                      (0., 0., 0.5, 1.), (0., 0., 0., 1.))
+        child_local = mat(3., -2., 1., scale=0.5)
+        child_world = ((1., 0., 0., 15.), (0., -1.5, 0., 2.),
+                       (0., 0., 0.25, 1.5), (0., 0., 0., 1.))
+        r = self.plan([item("Root", "group", local=nonuniform, world=nonuniform),
+                       item("Nested", "group", parent="Root", local=IDENTITY, world=nonuniform),
+                       item("Mesh", parent="Nested", geo="G", local=child_local, world=child_world),
+                       item("Copy", "instance", parent="Nested", source="Mesh",
+                            local=mat(-2.), world=mat(-10., scale=-1.))])
+        self.assertEqual(r.status, "success")
+        self.assertEqual(r.objects[0].world_matrix, nonuniform)
+        self.assertEqual(r.objects[2].local_matrix, child_local)
+        self.assertEqual(r.objects[2].world_matrix, child_world)
+        self.assertEqual(r.objects[3].world_matrix, mat(-10., scale=-1.))
+        self.assertEqual(r.objects[3].geometry_id, "G")
+
+    def test_converging_reference_dag_is_linear_and_not_cyclic(self):
+        # ~3,000 nodes, two edges per instance, repeated source reuse.
+        records = [item("Source", geo="G")]
+        for i in range(1, 3000):
+            records.append(item(f"N{i}", "instance", source="Source",
+                                parent=f"N{i-1}" if i > 1 else None))
+        r = InstanceGraphPlanner(Limits(max_depth=512)).plan_scene(records)
+        self.assertEqual(r.status, "failed")  # graph depth correctly bounded
+        self.assertEqual(r.count("REFERENCE_CYCLE"), 0)
+        self.assertGreater(r.count("GRAPH_DEPTH"), 0)
+
+    def test_nested_material_overrides_remain_object_local(self):
+        a = item("A", geo="G", materials=("Mat0", "Mat1"))
+        b = item("B", "instance", source="A", overrides=((0, "MatBlue"),))
+        c = item("C", "instance", source="B", overrides=((1, "MatRed"),))
+        r = self.plan([a, b, c])
+        self.assertEqual(r.status, "success")
+        self.assertEqual(tuple(x.geometry_id for x in r.objects), ("G", "G", "G"))
+        self.assertEqual(r.objects[0].material_ids, ("Mat0", "Mat1"))
+        self.assertEqual(r.objects[1].material_overrides, ((0, "MatBlue"),))
+        self.assertEqual(r.objects[2].material_overrides, ((1, "MatRed"),))
+        self.assertEqual(r.objects[1].material_ids, ())  # no cross-object mutation
+
+    def test_f0_plan_returns_actual_instance_plan(self):
+        node = SceneNode("Test", "Duplicate", "INSTANCE",
+                         source_metadata={"instance_source_id": "Original",
+                                          "world_matrix": mat(8.)})
+        planned = InstanceGraphPlanner().plan(node)
+        self.assertIsInstance(planned, InstancePlan)
+        self.assertEqual(planned.node_id, "Test")
+        self.assertEqual(planned.source_node_id, "Original")
 
     def test_f0_plan_port_accepts_safe_source_metadata(self):
         n = SceneNode("Id0", "source", "MESH", source_metadata={
