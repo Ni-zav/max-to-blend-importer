@@ -91,3 +91,32 @@ If Blender 4.2+ is locally installed:
 The optional Blender script uses in-memory, synthetic images only. Even if
 every check passes, native .max material fidelity is unverified until Wave 2
 wires F3 to the parser and tests authorized local scenes.
+
+## Gate 1 follow-up test matrix (G1 issuecomment-6334980119)
+
+Run from the latest F3 HEAD in a trusted full fork checkout containing
+the real F0 interfaces (no shims). The optional P0 cross-repository test
+requires a real schema path; otherwise unittest reports SKIP, not PASS.
+
+```sh
+PYTHONPATH=source python -m unittest discover -s tests/materials -p 'test_*.py' -v
+python -m compileall -q source/maxblend_core/materials tests/materials
+PYTHONPATH=source python -m unittest discover -s tests/baseline -v
+MAXBLEND_P0_SCHEMA=/trusted/3dsmax-to-blender/schemas/scene-manifest-v1.schema.json \
+  PYTHONPATH=source python -m unittest discover -s tests/materials -p 'test_*.py' -v
+blender --background --factory-startup --disable-autoexec --python tests/materials/blender_smoke.py
+```
+
+The synthetic Blender test checks Base Color from an image, Alpha from
+the same image's Alpha output, glossiness inversion through Math
+SUBTRACT, a Normal Map with Non-Color bitmap, distinct materials sharing
+names, missing-image diagnostics, IOR/coat/transmission socket values and
+unknown material class warnings. No external image or MAX file is opened.
+
+Even when F4 marks a texture found, F3 records shader_links_unverified
+until a Blender node builder returns actual link evidence. P0 record
+schema validation does not validate scene cross-references; P6 owns that.
+
+Native Multi/Sub IDs (including gaps/nonzero IDs) remain diagnostic
+references, not zero-based Blender polygon indices. F2/F6 must construct
+the ordered slot map and map raw per-face native IDs to those indices.
