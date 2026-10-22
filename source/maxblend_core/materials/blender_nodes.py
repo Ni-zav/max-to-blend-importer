@@ -99,6 +99,10 @@ def build_material(detail: MaterialDetail, images=None, *, bpy_module=None) -> M
         role_by_image.setdefault(intent.texture_id, set()).add(intent.role)
     for intent in detail.textures:
         channel = intent.channel
+        if intent.transform == "ambiguous":
+            diagnostics.append(_warning("ambiguous_map_not_linked",
+                                        "Source map convention unknown; cannot infer link", channel))
+            continue
         if intent.state != "found":
             diagnostics.append(_warning("unresolved_image", "Image was not verified by F4", channel))
             continue
