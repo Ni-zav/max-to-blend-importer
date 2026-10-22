@@ -252,6 +252,33 @@ class InstanceTests(unittest.TestCase):
         self.assertEqual(r.objects[2].material_overrides, ((1, "MatRed"),))
         self.assertEqual(r.objects[1].material_ids, ())  # no cross-object mutation
 
+
+    def test_malformed_source_key_is_fatal_not_unhandled_exception(self):
+        from dataclasses import replace
+        malicious = replace(item("X", "instance", source=None),
+                            source_node_id=["not", "hashable"])
+        r = self.plan([malicious])
+        self.assertEqual(r.status, "failed")
+        self.assertEqual(r.count("INVALID_SOURCE_ID"), 1)
+        self.assertIsNone(r.objects[0].source_node_id)
+
+    def test_malformed_geometry_key_is_fatal_not_unhandled_exception(self):
+        from dataclasses import replace
+        malicious = replace(item("X", geo="G"), geometry_id=["not", "hashable"])
+        r = self.plan([malicious])
+        self.assertEqual(r.status, "failed")
+        self.assertEqual(r.count("INVALID_GEOMETRY_ID"), 1)
+        self.assertIsNone(r.objects[0].geometry_id)
+
+    def test_malformed_material_inputs_are_bounded_and_failed(self):
+        from dataclasses import replace
+        malicious = replace(item("X", geo="G"), material_ids=None,
+                            material_overrides=(("bad",),))
+        r = self.plan([malicious])
+        self.assertEqual(r.status, "failed")
+        self.assertGreater(r.count("MATERIAL_LIMIT"), 0)
+        self.assertGreater(r.count("INVALID_MATERIAL_OVERRIDE"), 0)
+
     def test_f0_plan_returns_actual_instance_plan(self):
         node = SceneNode("Test", "Duplicate", "INSTANCE",
                          source_metadata={"instance_source_id": "Original",
