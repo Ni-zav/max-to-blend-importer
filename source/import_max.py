@@ -27,6 +27,18 @@ from pathlib import Path
 from bpy_extras.image_utils import load_image
 from bpy_extras.node_shader_utils import PrincipledBSDFWrapper
 
+from .maxblend_runtime import checked_bytes, ImportRejected, ImportReport
+from .maxblend_core.geometry import (reconstruct_editable_mesh, reconstruct_editable_poly,
+                                     PolyFaceChunk, MapChunk, project_material_slots)
+from .maxblend_core.materials import plan_material
+from .maxblend_core.materials.blender_nodes import build_material
+from .maxblend_core.textures import SafeTextureResolver
+from .maxblend_core.transforms import classify, multiply
+from .maxblend_core.interfaces import SceneNode
+from .maxblend_core.instances import InstanceGraphPlanner, InstanceInput
+import json
+import math
+
 
 ###################
 # DATA STRUCTURES #
@@ -109,6 +121,13 @@ SCENE_LIST = []
 object_list = []
 parent_dict = {}
 matrix_dict = {}
+
+# Serialized Blender imports only: intentionally no dynamic plugin/scene code.
+_import_report = None
+_texture_root = None
+_strict_import = True
+_last_report = None
+_chunk_count = 0
 
 
 def get_valid_name(name):
@@ -717,6 +736,9 @@ class ChunkReader(object):
         self.name = name
 
     def get_chunks(self, superid, data, level, conReader, primReader):
+        global _chunk_count
+        if _strict_import and (level > 48 or len(data) > 128 * 1024 * 1024):
+            raise ImportRejected("CHUNK_DEPTH_OR_SIZE_LIMIT")
         chunks = []
         offset = 0
         if (len(data) > ROOT_STORE and level == 0):
@@ -726,12 +748,18 @@ class ChunkReader(object):
             if (root == 0x8B1F):
                 long, step = get_long(data, step)
                 if (long in (0xB000000, 0xA040000, 0x8000001E)):
+                    if _strict_import:
+                        raise ImportRejected("COMPRESSED_NATIVE_STREAM_UNSUPPORTED")
                     data = zlib.decompress(data, zlib.MAX_WBITS | 32)
             elif (superid in (0xA, 0xB)):
                 chunk = primReader(superid, root, level, 1, len(data), data)
                 chunk.set_meta_data(data)
                 return [chunk]
         while offset < len(data):
+            if _strict_import:
+                _chunk_count += 1
+                if _chunk_count > 250000:
+                    raise ImportRejected("CHUNK_COUNT_LIMIT")
             offset, chunk = self.get_next_chunk(superid, data, offset, level,
                                                 len(chunks), conReader, primReader)
             chunks.append(chunk)
@@ -749,6 +777,8 @@ class ChunkReader(object):
             chunk = conReader(superid, typ, level, number, chunksize, data, primReader)
         else:
             chunk = primReader(superid, typ, level, number, chunksize, data)
+        if _strict_import and (chunksize <= header or offset + chunksize > len(data)):
+            raise ImportRejected("INVALID_CHUNK_FRAMING")
         chunkdata = data[offset + header:offset + chunksize]
         chunk.set_data(chunkdata)
         return offset + chunksize, chunk
@@ -1588,6 +1618,8 @@ def get_arch_material(ad):
 
 
 def adjust_material(filename, search, obj, mat):
+    if _strict_import:
+        return _build_verified_material(obj, mat)
     material = mtl_id = mtl_name = None
     dirname = os.path.dirname(filename)
     if (mat is not None):
@@ -1895,6 +1927,28 @@ def create_dummy_object(context, node, uid):
 
 
 def create_editable_poly(context, settings, node, msh, mat):
+    if _strict_import:
+        chunk = msh.get_first(0x08FE) if msh is not None else None
+        if chunk is None:
+            _import_report.warn("POLY_PAYLOAD_UNSUPPORTED")
+            return []
+        raw = chunk.get_first(0x0100)
+        faces = []
+        for child in chunk.children:
+            if child.types == 0x0118:
+                indices = child.get_first(0x0110)
+                material = child.get_first(0x0130)
+                if indices:
+                    faces.append(PolyFaceChunk(indices=indices.data,
+                                               material=material.data if material else None))
+        if not raw or not faces:
+            _import_report.warn("POLY_TOPOLOGY_UNSUPPORTED")
+            return []
+        planned = reconstruct_editable_poly("node_geometry", raw.data, faces)
+        if planned.mesh is None:
+            _import_report.warn("POLY_RECONSTRUCTION_FAILED")
+            return []
+        return [_create_planned_shape(context, settings, node, mat, planned)]
     polychunk = msh.get_first(0x08FE)
     created = []
     if (polychunk):
@@ -1933,6 +1987,40 @@ def create_editable_poly(context, settings, node, msh, mat):
 
 
 def create_editable_mesh(context, settings, node, msh, mat):
+    if _strict_import:
+        chunk = msh.get_first(0x08FE) if msh is not None else None
+        vertex = chunk.get_first(0x0914) if chunk else None
+        faces = chunk.get_first(0x0912) if chunk else None
+        if vertex is None or faces is None:
+            _import_report.warn("MESH_TOPOLOGY_UNSUPPORTED")
+            return []
+        # Material IDs remain native IDs unless F3 provides verified slot mapping.
+        # Indexed UV chunks must be paired by native channel; unmatched data
+        # is deliberately dropped rather than silently assigned to UVMap. 
+        maps = []
+        pending_channel = None
+        points = None
+        raw_indices = None
+        for child in chunk.children:
+            if child.types in (0x0924, 0x0959):
+                if pending_channel is not None and (points is None or raw_indices is None):
+                    _import_report.warn("UV_CHANNEL_INCOMPLETE")
+                pending_channel = get_long(child.data)[0] if len(child.data) >= 4 else None
+                points = raw_indices = None
+            elif child.types in (0x0916, 0x2394):
+                points = child.data
+            elif child.types in (0x0918, 0x2396):
+                raw_indices = child.data
+            if pending_channel is not None and points is not None and raw_indices is not None:
+                maps.append(MapChunk(pending_channel, points, raw_indices, "triangles"))
+                pending_channel = points = raw_indices = None
+        if pending_channel is not None or points is not None or raw_indices is not None:
+            _import_report.warn("UV_CHANNEL_INCOMPLETE")
+        planned = reconstruct_editable_mesh("node_geometry", vertex.data, faces.data, maps=maps)
+        if planned.mesh is None:
+            _import_report.warn("MESH_RECONSTRUCTION_FAILED")
+            return []
+        return [_create_planned_shape(context, settings, node, mat, planned)]
     meshchunk = msh.get_first(0x08FE)
     created = []
     if (meshchunk):
@@ -2248,12 +2336,245 @@ def make_scene(context, settings, mscale, transform, parent):
                 obj.matrix_world = mscale @ obj.matrix_world
 
 
+
+def _create_planned_shape(context, settings, node, mat, planned):
+    """Construct only validated F2 topology, preserving native per-face IDs."""
+    name = get_node_name(node)
+    mesh = planned.mesh
+    if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+        _import_report.warn("EMPTY_MESH_TOPOLOGY")
+    shape = bpy.data.meshes.new(str(name)[:255])
+    shape.from_pydata(mesh.vertices, [], mesh.faces)
+    shape.validate()
+    shape.update()
+    if 'UV' in settings[1]:
+        for layer in mesh.maps:
+            uv = shape.uv_layers.new(name="MAX_UV_%d" % layer.channel)
+            if len(uv.data) != len(layer.loop_uv):
+                _import_report.warn("UV_LOOP_COUNT_UNVERIFIED")
+                continue
+            for idx, pair in enumerate(layer.loop_uv):
+                uv.data[idx].uv = pair
+    elif mesh.maps:
+        _import_report.warn("UV_DISABLED_BY_OPERATOR")
+    obj = bpy.data.objects.new(str(name)[:255], shape)
+    context.view_layer.active_layer_collection.collection.objects.link(obj)
+    if 'MATERIAL' in settings[1]:
+        adjust_material(settings[0], False, obj, mat)
+    # No native Multi/Sub ID-to-slot mapping is proven by the legacy parser.
+    # F2 explicitly declines implicit ordinal mapping; preserve source IDs
+    # internally for diagnostics and leave Blender slot zero as a preview.
+    projected = project_material_slots(planned, None, slot_count=len(shape.materials))
+    if projected.plan.face_material_indices is None and mesh.face_material_ids:
+        _import_report.warn("NATIVE_FACE_MATERIAL_IDS_UNMAPPED")
+    if planned.status != "success":
+        _import_report.warn("GEOMETRY_PARTIAL")
+    object_list.append(obj)
+    return obj
+
+
+def _build_verified_material(obj, chunk):
+    """F3 planned Principled nodes + F4 default-deny texture references.
+
+    Source is already-decoded legacy material parameters; unknown native
+    classes and submaterials remain partial/unsupported, never 'supported'.
+    """
+    if chunk is None or obj is None or getattr(obj, "type", None) != 'MESH':
+        return None
+    uid = get_guid(chunk)
+    known = {
+        0x0002: ("Standard", get_standard_material),
+        0x0006: ("Standard", get_legacy_material),
+        PHYS_MTL: ("Physical", get_physical_material),
+        VRAY_MTL: ("VRay", get_vray_material),
+        CORO_MTL: ("Corona", get_corona_material),
+    }
+    if uid not in known:
+        _import_report.warn("MATERIAL_CLASS_UNSUPPORTED")
+        return None
+    family, decoder = known[uid]
+    try:
+        references = get_reference(chunk) if uid == VRAY_MTL else get_references(chunk)
+        params = decoder(references)
+        if params is None:
+            _import_report.warn("MATERIAL_PARAMETERS_UNSUPPORTED")
+            return None
+        values = dict(params.data)
+        textures = {}
+        images = {}
+        resolver = SafeTextureResolver(approved_roots=(_texture_root,) if _texture_root else ())
+        for i, key in enumerate(("bitmap", "shinmap", "glossmap", "transmap", "normalmap")):
+            raw = values.pop(key, None)
+            if raw is None:
+                continue
+            if not isinstance(raw, str):
+                _import_report.warn("TEXTURE_REFERENCE_UNSUPPORTED")
+                continue
+            texture_id = "texture_%d" % i
+            resolved = resolver.resolve_detailed(raw, slot=key)
+            textures[key] = {"id": texture_id, "kind": "bitmap", "state": resolved.state}
+            if resolved.state == "found" and resolved.resolved_path:
+                try:
+                    image = bpy.data.images.load(resolved.resolved_path, check_existing=True)
+                    images[texture_id] = image
+                except (OSError, RuntimeError, ValueError):
+                    _import_report.warn("TEXTURE_IMAGE_DECODE_FAILED")
+            else:
+                _import_report.warn("TEXTURE_UNRESOLVED")
+        name = get_node_name(chunk)
+        detail = plan_material("mat_%x_%d" % (uid, chunk.number), {
+            "class": family, "name": str(name)[:128], "params": values, "textures": textures,
+        })
+        built = build_material(detail, images=images, bpy_module=bpy)
+        obj.data.materials.append(built.material)
+        _import_report.materials_created += 1
+        _import_report.textures_linked += len(built.linked_channels)
+        if built.status != "success":
+            _import_report.warn("MATERIAL_PARTIAL")
+        return built.material
+    except (AttributeError, TypeError, IndexError, KeyError, ValueError, RuntimeError):
+        _import_report.warn("MATERIAL_DECODE_FAILED")
+        return None
+
+
+def _make_scene_verified(context, settings, mscale, transform, parent):
+    """F1 matrix checks and F8 ID-based graph before actual Blender links.
+
+    Native static PRS only. Unknown animation, camera/light physical semantics,
+    units, layers and renderer proxies are reported, not synthesized.
+    """
+    global _import_report
+    all_chunks = parent.children
+    selected = []
+    ids = {id(chunk): "node_%d" % i for i, chunk in enumerate(all_chunks)}
+    inputs = []
+    locals_by_id = {}
+    for chunk in all_chunks:
+        try:
+            prs, mesh, material, layer = get_matrix_mesh_material(chunk)
+            parent_chunk = get_node_parent(chunk)
+            parent_id = ids.get(id(parent_chunk)) if parent_chunk is not None else None
+            if parent_chunk is not None and parent_id is None:
+                raise ImportRejected("UNRESOLVED_PARENT_REFERENCE")
+            kind = get_guid(mesh) if mesh is not None else None
+            role = ("mesh" if kind in (EDIT_MESH, EDIT_POLY, POLY_MESH, 0x10, 0x11, 0x12, 0x16, 0x19)
+                    else "empty" if kind == DUMMY else "other")
+            local = create_matrix(prs) if prs else mathutils.Matrix.Identity(4)
+            raw = tuple(tuple(float(value) for value in row) for row in local)
+            properties = classify(raw)
+            if properties.singular:
+                _import_report.warn("SINGULAR_TRANSFORM")
+            if properties.mirrored:
+                _import_report.warn("MIRRORED_TRANSFORM")
+            if properties.shear:
+                _import_report.warn("SHEARED_TRANSFORM")
+            node_id = ids[id(chunk)]
+            local_node = SceneNode(node_id, str(get_node_name(chunk))[:255],
+                                   role, parent_id, raw)
+            locals_by_id[node_id] = raw
+            geometry_id = "geometry_%d" % list(ids).index(id(mesh)) if mesh is not None and id(mesh) in ids else None
+            # Referenced geometry is often not itself a top-level SceneChunk.
+            # Assign opaque stable indices in first-seen order below.
+            selected.append((chunk, node_id, parent_id, local, mesh, role, geometry_id))
+        except ImportRejected:
+            raise
+        except Exception:
+            _import_report.warn("SCENE_NODE_UNDECODABLE")
+            continue
+    # Stable document-local identity: repeated reference objects share a key.
+    geo_seen = {}
+    for chunk, node_id, parent_id, local, mesh, role, _ in selected:
+        key = id(mesh) if mesh is not None else None
+        if role == "mesh" and key not in geo_seen:
+            geo_seen[key] = "geometry_%d" % len(geo_seen)
+    from .maxblend_core.transforms import IDENTITY
+    resolved = {}
+    waiting = {node_id: (chunk, parent_id, local, mesh, role) for
+               chunk, node_id, parent_id, local, mesh, role, _ in selected}
+    # F1 matrix multiplication, bounded topological resolution.
+    while waiting:
+        progressed = False
+        for node_id, (_, parent_id, local, _, _) in list(waiting.items()):
+            if parent_id is not None and parent_id not in resolved:
+                continue
+            parent_world = resolved[parent_id] if parent_id else IDENTITY
+            matrix = tuple(tuple(float(value) for value in row) for row in local)
+            resolved[node_id] = multiply(parent_world, matrix)
+            del waiting[node_id]
+            progressed = True
+        if not progressed:
+            raise ImportRejected("SCENE_HIERARCHY_CYCLE_OR_MISSING_PARENT")
+    for chunk, node_id, parent_id, local, mesh, role, _ in selected:
+        scene_node = SceneNode(node_id, str(get_node_name(chunk))[:255], role,
+                               parent_id, locals_by_id[node_id])
+        inputs.append(InstanceInput(scene_node, role=role,
+                                    geometry_id=geo_seen.get(id(mesh)) if role == "mesh" else None,
+                                    world_matrix=resolved[node_id]))
+    plan = InstanceGraphPlanner().plan_scene(inputs)
+    if plan.status == "failed" or plan.truncated:
+        raise ImportRejected("INSTANCE_GRAPH_REJECTED")
+    if plan.status != "success":
+        _import_report.warn("INSTANCE_GRAPH_PARTIAL")
+    created = {}
+    mesh_cache = {}
+    for chunk, node_id, parent_id, local, mesh, role, _ in selected:
+        if role == "other":
+            _import_report.warn("NODE_CLASS_UNSUPPORTED")
+            continue
+        try:
+            _, native_mesh, native_mat, _ = get_matrix_mesh_material(chunk)
+            geometry_key = geo_seen.get(id(mesh))
+            if role == "mesh" and geometry_key in mesh_cache:
+                original = mesh_cache[geometry_key]
+                # Per-instance material overrides cannot safely share a mesh
+                # until native material-slot assignments are verified.
+                if native_mat is None:
+                    instance = bpy.data.objects.new(str(get_node_name(chunk))[:255], original.data)
+                    context.view_layer.active_layer_collection.collection.objects.link(instance)
+                    objects = [instance]
+                else:
+                    _import_report.warn("INSTANCE_MATERIAL_OVERRIDE_UNVERIFIED")
+                    objects, _ = create_mesh(context, settings, chunk, native_mesh, native_mat, None)
+            else:
+                objects, _ = create_mesh(context, settings, chunk, native_mesh, native_mat, None)
+            if not objects:
+                _import_report.warn("NODE_NOT_CONSTRUCTED")
+                continue
+            created[node_id] = objects[0]
+            if role == "mesh" and geometry_key not in mesh_cache:
+                mesh_cache[geometry_key] = objects[0]
+            _import_report.objects_created += len(objects)
+        except Exception:
+            _import_report.warn("NODE_CONSTRUCTION_FAILED")
+    # Parent relationships are tied to validated source indices, never names.
+    for node_id, obj in created.items():
+        parent_id = next((item[2] for item in selected if item[1] == node_id), None)
+        parent_obj = created.get(parent_id)
+        if parent_id is not None and parent_obj is None:
+            _import_report.warn("PARENT_OBJECT_UNAVAILABLE")
+        if parent_obj is not None:
+            obj.parent = parent_obj
+    context.view_layer.update()
+    for node_id, obj in created.items():
+        try:
+            obj.matrix_world = mscale @ mathutils.Matrix(resolved[node_id]) if transform else mscale
+        except Exception:
+            _import_report.warn("WORLD_TRANSFORM_UNAPPLIED")
+    context.view_layer.update()
+    _import_report.warn("SOURCE_UNIT_FIDELITY_UNVERIFIED")
+    _import_report.warn("ANIMATION_AND_LAYER_DATA_UNSUPPORTED")
+    return created
+
+
 def read_scene(context, maxfile, settings, mscale, transform):
     global SCENE_LIST, META_DATA
     metasid = min(max(entry.sid for entry in maxfile.direntries if entry is not None), 11)
     SCENE_LIST = read_chunks(maxfile, 'Scene', SceneChunk)
     META_DATA = read_chunks(maxfile, maxfile.direntries[metasid].name, superId=metasid) if metasid >= 0xA else []
-    make_scene(context, settings, mscale, transform, SCENE_LIST[0])
+    if _strict_import:
+        _make_scene_verified(context, settings, mscale, transform, SCENE_LIST[0])
+    else:
+        make_scene(context, settings, mscale, transform, SCENE_LIST[0])
     # For debug: Print directory
     # print('Directory', maxfile.direntries[0].kids_dict.keys())
 
@@ -2269,25 +2590,46 @@ def _dispatch_scene_import(context, maxfile, settings, mscale, transform):
 
 
 def read(context, filename, mscale, obtypes, search, transform):
-    if (is_maxfile(filename)):
-        settings = filename, obtypes, search
-        maxfile = ImportMaxFile(filename)
-        read_class_data(maxfile, filename)
-        read_config(maxfile, filename)
-        read_directory(maxfile, filename)
-        read_class_directory(maxfile, filename)
-        read_video_postqueue(maxfile, filename)
-        _dispatch_scene_import(context, maxfile, settings, mscale, transform)
-    else:
-        print("File seems to be no 3D Studio Max file!")
+    """Open once, structurally vet, and pass the same bounded bytes to parser."""
+    global _import_report, _last_report, _chunk_count
+    _chunk_count = 0
+    _import_report = ImportReport()
+    _last_report = _import_report
+    try:
+        data, probe = checked_bytes(os.path.abspath(filename))
+        _import_report.container = probe.kind
+        settings = filename, obtypes, False
+        with ImportMaxFile(data) as maxfile:
+            read_class_data(maxfile, None)
+            read_config(maxfile, None)
+            read_directory(maxfile, None)
+            read_class_directory(maxfile, None)
+            read_video_postqueue(maxfile, None)
+            _dispatch_scene_import(context, maxfile, settings, mscale, transform)
+        if _import_report.status == "unsupported":
+            _import_report.status = "partial" if _import_report.objects_created else "unsupported"
+    except ImportRejected as exc:
+        _import_report.status = "failed"
+        _import_report.warn(str(exc))
+        raise
+    except Exception:
+        _import_report.status = "failed"
+        _import_report.warn("IMPORT_PARSER_FAILED")
+        raise ImportRejected("IMPORT_PARSER_FAILED") from None
+    finally:
+        # No source names, project paths or geometry leave the local process.
+        context.scene["maxblend_last_import_report"] = json.dumps(_import_report.as_dict())
+    return _import_report
+
 
 
 def load(operator, context, files=[], directory="", filepath="", scale_objects=1.0, use_collection=False,
          use_image_search=True, object_filter=None, use_apply_matrix=True, global_matrix=None):
 
+    global _texture_root
     parent_dict.clear()
     matrix_dict.clear()
-
+    _texture_root = getattr(operator, "approved_texture_root", "") or None
     context.window.cursor_set('WAIT')
     mscale = mathutils.Matrix.Scale(scale_objects, 4)
     if global_matrix is not None:
@@ -2302,12 +2644,21 @@ def load(operator, context, files=[], directory="", filepath="", scale_objects=1
         files = [Path(filepath)]
         directory = Path(filepath).parent
 
+    completed = True
     for fl in files:
         if use_collection:
             collection = bpy.data.collections.new(Path(fl.name).stem)
             context.scene.collection.children.link(collection)
             context.view_layer.active_layer_collection = context.view_layer.layer_collection.children[collection.name]
-        read(context, os.path.join(directory, fl.name), mscale, obtypes=object_filter, search=use_image_search, transform=use_apply_matrix)
+        try:
+            read(context, os.path.join(directory, fl.name), mscale,
+                 obtypes=object_filter, search=False, transform=use_apply_matrix)
+            if _last_report.status in ("failed", "unsupported"):
+                completed = False
+                operator.report({'WARNING'}, "MAX import unsupported or partial; see local report")
+        except ImportRejected:
+            completed = False
+            operator.report({'ERROR'}, "MAX rejected or unsupported; see local report")
 
     parent_dict.clear()
     matrix_dict.clear()
@@ -2318,4 +2669,4 @@ def load(operator, context, files=[], directory="", filepath="", scale_objects=1
 
     context.window.cursor_set('DEFAULT')
 
-    return {'FINISHED'}
+    return {'FINISHED'} if completed else {'CANCELLED'}
