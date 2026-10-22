@@ -767,18 +767,23 @@ class ChunkReader(object):
 
     def get_next_chunk(self, superid, data, offset, level, number, conReader, primReader):
         header = 6
+        if _strict_import and offset + header > len(data):
+            raise ImportRejected("TRUNCATED_CHUNK_HEADER")
         typ, siz = struct.unpack("<Hi", data[offset:offset + header])
         chunksize = siz & UNKNOWN_SIZE
         if (siz == 0):
+            if _strict_import and offset + header + 8 > len(data):
+                raise ImportRejected("TRUNCATED_LONG_CHUNK_HEADER")
             siz, = struct.unpack("<q", data[offset + header:offset + header + 8])
             header += 8
             chunksize = siz & MAXFILE_SIZE
+        # Validate before recursive constructor consumes children.
+        if _strict_import and (chunksize <= header or chunksize > len(data) - offset):
+            raise ImportRejected("INVALID_CHUNK_FRAMING")
         if (siz < 0):
             chunk = conReader(superid, typ, level, number, chunksize, data, primReader)
         else:
             chunk = primReader(superid, typ, level, number, chunksize, data)
-        if _strict_import and (chunksize <= header or offset + chunksize > len(data)):
-            raise ImportRejected("INVALID_CHUNK_FRAMING")
         chunkdata = data[offset + header:offset + chunksize]
         chunk.set_data(chunkdata)
         return offset + chunksize, chunk
@@ -2472,10 +2477,9 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
             local_node = SceneNode(node_id, str(get_node_name(chunk))[:255],
                                    role, parent_id, raw)
             locals_by_id[node_id] = raw
-            geometry_id = "geometry_%d" % list(ids).index(id(mesh)) if mesh is not None and id(mesh) in ids else None
-            # Referenced geometry is often not itself a top-level SceneChunk.
-            # Assign opaque stable indices in first-seen order below.
-            selected.append((chunk, node_id, parent_id, local, mesh, role, geometry_id))
+            # Referenced geometry is often not a top-level SceneChunk.
+            # Assign opaque document-order identity in the next pass.
+            selected.append((chunk, node_id, parent_id, local, mesh, role, None))
         except ImportRejected:
             raise
         except Exception:
@@ -2517,6 +2521,7 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
         _import_report.warn("INSTANCE_GRAPH_PARTIAL")
     created = {}
     mesh_cache = {}
+    parent_for = {node_id: parent_id for _, node_id, parent_id, _, _, _, _ in selected}
     for chunk, node_id, parent_id, local, mesh, role, _ in selected:
         if role == "other":
             _import_report.warn("NODE_CLASS_UNSUPPORTED")
@@ -2548,7 +2553,7 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
             _import_report.warn("NODE_CONSTRUCTION_FAILED")
     # Parent relationships are tied to validated source indices, never names.
     for node_id, obj in created.items():
-        parent_id = next((item[2] for item in selected if item[1] == node_id), None)
+        parent_id = parent_for[node_id]
         parent_obj = created.get(parent_id)
         if parent_id is not None and parent_obj is None:
             _import_report.warn("PARENT_OBJECT_UNAVAILABLE")
@@ -2557,7 +2562,7 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
     context.view_layer.update()
     for node_id, obj in created.items():
         try:
-            obj.matrix_world = mscale @ mathutils.Matrix(resolved[node_id]) if transform else mscale
+            obj.matrix_world = mscale @ mathutils.Matrix(resolved[node_id]) if transform else mscale.copy()
         except Exception:
             _import_report.warn("WORLD_TRANSFORM_UNAPPLIED")
     context.view_layer.update()
