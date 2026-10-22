@@ -13,7 +13,7 @@ import math
 import re
 from collections import Counter, deque
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Iterable, Literal, Mapping
 
 from ..interfaces import Diagnostic, InstancePlan, Matrix4, ResultStatus, SceneNode
 
@@ -157,7 +157,7 @@ class InstanceGraphPlanner:
         A per-node call cannot establish graph uniqueness or parent transforms.
         F6 should use plan_scene and reject its failed/truncated reports.
         """
-        meta = node.source_metadata
+        meta = node.source_metadata if isinstance(node.source_metadata, Mapping) else {}
         target = meta.get("instance_source_id")
         world = meta.get("world_matrix")
         diags: list[Diagnostic] = []
@@ -203,6 +203,9 @@ class InstanceGraphPlanner:
                 warn("INVALID_INPUT", "Expected InstanceInput", error=True)
                 continue
             node = item.node
+            if not isinstance(node, SceneNode):
+                warn("INVALID_INPUT", "Expected F0 SceneNode", error=True)
+                continue
             if not _valid_id(node.node_id) or node.node_id in indexed:
                 warn("INVALID_OR_DUPLICATE_ID", "Invalid or repeated object identifier", error=True)
                 continue
@@ -231,19 +234,26 @@ class InstanceGraphPlanner:
                     warn("DUPLICATE_NATIVE_ID", "Duplicate native object identifier", error=True)
                 else:
                     seen_native_ids.add(item.native_id)
-            if len(node.name) > 256:
-                warn("NAME_LIMIT", "Object name exceeds bound", error=True)
-            if not isinstance(item.material_ids, tuple) or len(item.material_ids) > limits.max_materials_per_object:
+            if not isinstance(node.name, str) or len(node.name) > 256:
+                warn("NAME_LIMIT", "Object name exceeds bound or is not text", error=True)
+            slots = item.material_ids if isinstance(item.material_ids, tuple) else ()
+            overrides = item.material_overrides if isinstance(item.material_overrides, tuple) else ()
+            if not isinstance(item.material_ids, tuple) or len(slots) > limits.max_materials_per_object:
                 warn("MATERIAL_LIMIT", "Material slot count exceeds bound", error=True)
-            if not isinstance(item.material_overrides, tuple) or len(item.material_overrides) > limits.max_materials_per_object:
+            if not isinstance(item.material_overrides, tuple) or len(overrides) > limits.max_materials_per_object:
                 warn("MATERIAL_LIMIT", "Material overrides exceed bound", error=True)
-            if not all(_valid_id(s) for s in item.material_ids):
+            if not all(_valid_id(slot) for slot in slots):
                 warn("INVALID_MATERIAL_ID", "Invalid material identifier", error=True)
-            if not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0
-                       and i < limits.max_materials_per_object and _valid_id(v)
-                       for i, v in item.material_overrides):
+            valid_overrides = all(
+                isinstance(entry, tuple) and len(entry) == 2 and
+                isinstance(entry[0], int) and not isinstance(entry[0], bool) and
+                0 <= entry[0] < limits.max_materials_per_object and _valid_id(entry[1])
+                for entry in overrides
+            )
+            if not valid_overrides:
                 warn("INVALID_MATERIAL_OVERRIDE", "Invalid material override slot or id", error=True)
-            if len({i for i, _ in item.material_overrides}) != len(item.material_overrides):
+                overrides = ()
+            if len({entry[0] for entry in overrides}) != len(overrides):
                 warn("DUPLICATE_OVERRIDE", "Multiple values for one material slot", error=True)
             if item.geometry_id is not None and not _valid_id(item.geometry_id):
                 warn("INVALID_GEOMETRY_ID", "Invalid geometry source identifier", error=True)
@@ -284,7 +294,7 @@ class InstanceGraphPlanner:
             objects.append(ObjectInstance(
                 node.node_id, item.native_id, node.name, role, node.parent_id,
                 item.source_node_id, item.geometry_id, node.local_matrix, item.world_matrix,
-                item.material_ids, item.material_overrides, safe_ref, state))
+                slots, overrides, safe_ref, state))
 
         # Topological walk over *both* parent and source edges. Dedupe edges
         # so a parent/source referring to the same node is not a false cycle.
@@ -296,7 +306,7 @@ class InstanceGraphPlanner:
         for key, item in indexed.items():
             distinct = tuple(dict.fromkeys(
                 dep for dep in (item.node.parent_id, item.source_node_id)
-                if dep is not None
+                if _valid_id(dep)
             ))
             available: list[str] = []
             for dep in distinct:
