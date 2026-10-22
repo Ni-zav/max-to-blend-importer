@@ -58,6 +58,48 @@ try:
     built = build_material(detail, bpy_module=bpy)
     obj.data.materials.append(built.material)
     assert obj.data.materials[0].node_tree.nodes.get("Principled BSDF") is not None
+    # Actual Blender parent/child regression with same display names: parent
+    # scale and global coordinate conversion must apply *once*, including
+    # negative determinant and nonuniform scale. IDs, never names, bind links.
+    parent_obj = bpy.data.objects.new("Repeated", None)
+    child_obj = bpy.data.objects.new("Repeated", None)
+    bpy.context.collection.objects.link(parent_obj)
+    bpy.context.collection.objects.link(child_obj)
+    scale_mirror = Matrix.Diagonal((2.0, 3.0, -1.0, 1.0))
+    local_parent = Matrix.Translation((5.0, 0.0, 0.0)) @ scale_mirror
+    local_child = Matrix.Translation((2.0, 0.0, 0.0))
+    parent_world = local_parent
+    child_world = parent_world @ local_child
+    def matrix_tuple(value):
+        return tuple(tuple(float(x) for x in row) for row in value)
+    import_max._apply_import_transforms(
+        bpy.context, {"node_child": child_obj, "node_parent": parent_obj},
+        {"node_parent": None, "node_child": "node_parent"},
+        {"node_parent": matrix_tuple(local_parent), "node_child": matrix_tuple(local_child)},
+        {"node_parent": matrix_tuple(parent_world), "node_child": matrix_tuple(child_world)},
+        ["node_parent", "node_child"], Matrix.Scale(2.0, 4), True)
+    expected = Matrix.Scale(2.0, 4) @ child_world
+    assert child_obj.parent is parent_obj
+    assert max(abs(child_obj.matrix_world[i][j] - expected[i][j])
+               for i in range(4) for j in range(4)) < 1e-5
+    assert child_obj.matrix_world.determinant() < 0
+    import_max._apply_import_transforms(
+        bpy.context, {"node_child": child_obj, "node_parent": parent_obj},
+        {"node_parent": None, "node_child": "node_parent"},
+        {"node_parent": matrix_tuple(local_parent), "node_child": matrix_tuple(local_child)},
+        {"node_parent": matrix_tuple(parent_world), "node_child": matrix_tuple(child_world)},
+        ["node_parent", "node_child"], Matrix.Scale(2.0, 4), False)
+    assert abs(child_obj.matrix_world[0][0] - 2.0) < 1e-5
+    assert abs(child_obj.matrix_world.translation.x) < 1e-5
+    # Restoring verified basis must be idempotent.
+    import_max._apply_import_transforms(
+        bpy.context, {"node_child": child_obj, "node_parent": parent_obj},
+        {"node_parent": None, "node_child": "node_parent"},
+        {"node_parent": matrix_tuple(local_parent), "node_child": matrix_tuple(local_child)},
+        {"node_parent": matrix_tuple(parent_world), "node_child": matrix_tuple(child_world)},
+        ["node_parent", "node_child"], Matrix.Scale(2.0, 4), True)
+    assert max(abs(child_obj.matrix_world[i][j] - expected[i][j])
+               for i in range(4) for j in range(4)) < 1e-5
     with tempfile.TemporaryDirectory() as tmp:
         bad = Path(tmp) / "invalid.max"
         bad.write_bytes(b"INVALID!" + bytes(2048))
@@ -73,6 +115,6 @@ try:
         outcome = json.loads(bpy.context.scene["maxblend_last_import_report"])
         assert outcome["status"] == "failed"
         assert "invalid.max" not in json.dumps(outcome)
-    print("F6 Blender 4.2 synthetic smoke PASS: operator, F2 UV/material IDs, F3 nodes, F5 reject")
+    print("F6 Blender 4.2 synthetic smoke PASS: operator, F1 nested mirrored world, F2 UV/material IDs, F3 nodes, F5 reject")
 finally:
     addon.unregister()
