@@ -36,6 +36,7 @@ from .maxblend_core.textures import SafeTextureResolver
 from .maxblend_core.transforms import classify, multiply
 from .maxblend_core.interfaces import SceneNode
 from .maxblend_core.instances import InstanceGraphPlanner, InstanceInput
+from .maxblend_core.scene_nodes import (Evidence, NodeDetails, build_scene, class_hint)
 import json
 import math
 
@@ -2485,6 +2486,23 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
         except Exception:
             _import_report.warn("SCENE_NODE_UNDECODABLE")
             continue
+    # F7 validates only decoded identities and parent references. GUID hints
+    # for camera/light are not physical parameter or keyframe decoders.
+    details = []
+    for index, (chunk, node_id, parent_id, local, mesh, role, _) in enumerate(selected):
+        guid = get_guid(mesh) if mesh is not None else None
+        hint = class_hint(guid)
+        kind = hint if hint != "UNKNOWN" else role.upper()
+        details.append(NodeDetails(
+            SceneNode(node_id, str(get_node_name(chunk))[:255], kind,
+                      parent_id, locals_by_id[node_id]),
+            Evidence("Scene", record_index=index), native_guid=guid,
+            normalized_transform=False))
+    scene_plan = build_scene(tuple(details))
+    if scene_plan.status == "failed":
+        raise ImportRejected("SCENE_NODE_GRAPH_REJECTED")
+    if scene_plan.status != "success":
+        _import_report.warn("SCENE_NODE_DETAILS_PARTIAL")
     # Stable document-local identity: repeated reference objects share a key.
     geo_seen = {}
     for chunk, node_id, parent_id, local, mesh, role, _ in selected:
