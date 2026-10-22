@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# I0 independent research verification. Synthetic evidence claims only.
+name: Native MAX writer research no-go verification
+on:
+  push:
+    branches: [research/w2-native-max-writer, main]
+    paths:
+      - 'research/native_max_writer/**'
+      - 'tests/native_writer/**'
+      - '.github/workflows/native-writer-research.yml'
+  pull_request:
+    paths:
+      - 'research/native_max_writer/**'
+      - 'tests/native_writer/**'
+      - '.github/workflows/native-writer-research.yml'
+permissions:
+  contents: read
+jobs:
+  fail-closed-research:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile research-only Python
+        run: python -m compileall -q research/native_max_writer tests/native_writer
+      - name: Independently execute committed negative and deterministic research tests
+        run: python -m unittest discover -s tests/native_writer -p 'test_*.py' -v
+      - name: Confirm no production writer operator or native serializer advertised
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from research.native_max_writer.gate import assess
+          result = assess({})
+          assert result["decision"] == "no_go"
+          assert result["native_export_enabled"] is False
+          source = (Path("source") / "__init__.py").read_text(encoding="utf-8")
+          assert "export_scene.max" not in source
+          print("Synthetic research no-go verified; native MAX export NOT IMPLEMENTED")
+          PY
