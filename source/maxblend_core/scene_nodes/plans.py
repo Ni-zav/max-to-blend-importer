@@ -9,7 +9,7 @@ F1 owns conversion and must supply affirmative evidence for that precondition.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 import re
 from typing import Literal
@@ -38,6 +38,10 @@ def _finite(value: object) -> bool:
 
 def _positive(value: object) -> bool:
     return _finite(value) and value > 0
+
+
+def _valid_id(value: object) -> bool:
+    return isinstance(value, str) and _ID.fullmatch(value) is not None
 
 
 def _diag(code: str, reason: str, evidence: "Evidence | None", *, error: bool = False) -> Diagnostic:
@@ -89,6 +93,8 @@ class Camera:
     ortho_width_m: float | None = None
     clip_near_m: float | None = None
     clip_far_m: float | None = None
+    # A decoded explicit target only; None never implies there is no native target.
+    target_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,11 +166,11 @@ class NodePlanner:
 
     def plan(self, node: SceneNode) -> SceneNodePlan:
         issues: list[Diagnostic] = []
-        if not _ID.fullmatch(node.node_id):
+        if not _valid_id(node.node_id):
             issues.append(_diag("invalid_node_id", "Invalid manifest object id", None, error=True))
-        if node.parent_id is not None and not _ID.fullmatch(node.parent_id):
+        if node.parent_id is not None and not _valid_id(node.parent_id):
             issues.append(_diag("invalid_parent_id", "Invalid parent object id", None, error=True))
-        if not node.name or len(node.name) > 256:
+        if not isinstance(node.name, str) or not node.name or len(node.name) > 256:
             issues.append(_diag("invalid_node_name", "Object name missing or too long", None, error=True))
         if node.local_matrix is not None:
             try:
@@ -179,8 +185,10 @@ class NodePlanner:
 
 def _camera_issues(cam: Camera, ev: Evidence) -> list[Diagnostic]:
     problems: list[Diagnostic] = []
-    if cam.projection == "UNKNOWN":
-        problems.append(_diag("camera_projection_unknown", "Camera projection not verified", ev))
+    if cam.projection not in {"PERSPECTIVE", "ORTHOGRAPHIC"}:
+        problems.append(_diag("camera_projection_unknown", "Camera projection unsupported or not verified", ev))
+    if cam.target_id is not None and not _valid_id(cam.target_id):
+        problems.append(_diag("invalid_camera_target_id", "Camera target id is invalid", ev, error=True))
     for name in ("horizontal_fov_rad", "focal_length_mm", "filmback_width_mm",
                  "filmback_height_mm", "ortho_width_m", "clip_near_m", "clip_far_m"):
         v = getattr(cam, name)
@@ -208,7 +216,7 @@ def _camera_issues(cam: Camera, ev: Evidence) -> list[Diagnostic]:
 
 def _light_issues(light: Light, ev: Evidence) -> list[Diagnostic]:
     issues: list[Diagnostic] = []
-    if light.kind == "UNKNOWN":
+    if light.kind not in {"POINT", "SUN", "SPOT", "AREA"}:
         issues.append(_diag("light_kind_unsupported", "Unknown/unsupported light class", ev))
     if light.intensity is not None and (not _finite(light.intensity) or light.intensity < 0):
         issues.append(_diag("invalid_light_intensity", "Intensity must be finite and nonnegative", ev, error=True))
@@ -232,21 +240,22 @@ def _track_issues(track: TransformTrack, ids: set[str], timeline: Timeline) -> l
     ev = track.evidence
     if track.target_id is None or track.target_id not in ids:
         issues.append(_diag("animation_target_missing", "Animation target not found", ev, error=True))
-    if track.channel not in _SUPPORTED or not track.controller_supported:
+    if track.channel not in _SUPPORTED or track.controller_supported is not True:
         issues.append(_diag("unsupported_controller", "Controller/channel is not supported", ev))
     if not track.keys:
         issues.append(_diag("animation_source_missing", "No decoded animation keys/samples", ev))
     if track.normalized_values is not True:
         issues.append(_diag("animation_axes_unverified", "F1 normalized axes/metres not verified", ev))
-    if track.interpolation != "UNKNOWN" and not track.interpolation_verified:
+    if track.interpolation not in {"UNKNOWN", "LINEAR", "CONSTANT"} or (track.interpolation != "UNKNOWN" and track.interpolation_verified is not True):
         issues.append(_diag("interpolation_unverified", "Interpolation lacks verified source semantics", ev))
     if track.mode == "SAMPLED" and track.interpolation != "UNKNOWN":
         issues.append(_diag("sample_interpolation_unsupported", "Samples cannot assert native interpolation", ev))
     length = 4 if track.channel == "rotation_quaternion" else 3
     prev = -math.inf
     for key in track.keys:
-        if not _finite(key.frame) or key.frame <= prev or len(key.value) != length or any(
-                not _finite(v) for v in key.value):
+        if (not _finite(key.frame) or key.frame <= prev or
+                not isinstance(key.value, (tuple, list)) or len(key.value) != length or
+                any(not _finite(v) for v in key.value)):
             issues.append(_diag("invalid_animation_keys", "Invalid frame order or track values", ev, error=True))
             break
         if (track.channel == "rotation_quaternion" and
@@ -281,7 +290,7 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
     by_id: dict[str, NodeDetails] = {}
     for item in nodes:
         base = planner.plan(item.node)
-        detail_issues: list[Diagnostic] = list(base.diagnostics)
+        detail_issues: list[Diagnostic] = [replace(d, evidence=item.evidence.token()) for d in base.diagnostics]
         if item.node.node_id in by_id:
             detail_issues.append(_diag("duplicate_node_id", "Duplicate scene id", item.evidence, error=True))
         by_id[item.node.node_id] = item
@@ -301,7 +310,7 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
             detail_issues.append(_diag("native_class_unknown", "No verified MAX class mapping", item.evidence))
         if item.visible is not None and type(item.visible) is not bool:
             detail_issues.append(_diag("invalid_visibility", "Visibility must be bool or unknown", item.evidence, error=True))
-        if item.layer_ids and (len(item.layer_ids) > 128 or any(not _ID.fullmatch(x) for x in item.layer_ids)):
+        if item.layer_ids and (len(item.layer_ids) > 128 or any(not _valid_id(x) for x in item.layer_ids)):
             detail_issues.append(_diag("invalid_layer_refs", "Invalid or excessive layer references", item.evidence, error=True))
         if item.normalized_transform is not True and item.node.local_matrix is not None:
             detail_issues.append(_diag("node_axes_unverified", "Local matrix axis/unit normalization unverified", item.evidence))
@@ -309,7 +318,7 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
         issues.extend(detail_issues)
     layer_by_id: dict[str, Layer] = {}
     for layer in layers:
-        if not _ID.fullmatch(layer.layer_id) or not layer.name or len(layer.name) > 256:
+        if not _valid_id(layer.layer_id) or not isinstance(layer.name, str) or not layer.name or len(layer.name) > 256:
             issues.append(_diag("invalid_layer", "Invalid layer id or name", layer.evidence, error=True))
         if layer.visible is not None and type(layer.visible) is not bool:
             issues.append(_diag("invalid_layer_visibility", "Layer visibility must be bool or unknown", layer.evidence, error=True))
@@ -321,7 +330,7 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
             issues.append(_diag("layer_parent_missing", "Missing parent layer", layer.evidence, error=True))
     # Iterative cycle check for layer graph, independent from object parenting.
     walked: set[str] = set()
-    for first in layer_by_id:
+    for first in sorted(layer_by_id):
         chain: set[str] = set()
         current: str | None = first
         while current in layer_by_id and current not in walked:
@@ -340,7 +349,7 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
             issues.append(_diag("parent_self", "Scene node parents itself", item.evidence, error=True))
     # Iterative linear-time cycle detection: no recursion on hostile hierarchies.
     visited: set[str] = set()
-    for initial in ids:
+    for initial in sorted(ids):
         path: set[str] = set()
         current: str | None = initial
         while current in ids and current not in visited:
@@ -354,6 +363,8 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
         for layer in item.layer_ids:
             if layer not in layer_by_id:
                 issues.append(_diag("layer_target_missing", "Assigned layer has no decoded layer record", item.evidence))
+        if item.camera is not None and item.camera.target_id is not None and _valid_id(item.camera.target_id) and item.camera.target_id not in ids:
+            issues.append(_diag("camera_target_missing", "Referenced camera target is absent", item.evidence, error=True))
     for track in tracks:
         issues.extend(_track_issues(track, ids, timeline))
     status = "failed" if any(d.status == "failed" for d in issues) else "partial" if issues else "success"
@@ -383,7 +394,7 @@ def manifest_animation_summaries(plan: ScenePlan) -> list[dict[str, object]]:
                          "evidence": track.evidence.token(), "attribute": track.channel[:128],
                          "before": None, "after": None})
         summaries.append({
-            "id": f"Animation{index}", "target_object_id": track.target_id if track.target_id and _ID.fullmatch(track.target_id) else None,
+            "id": f"Animation{index}", "target_object_id": track.target_id if _valid_id(track.target_id) else None,
             "start_frame": plan.timeline.start_frame, "end_frame": plan.timeline.end_frame,
             "fps": plan.timeline.fps if _positive(plan.timeline.fps) else None,
             "supported_tracks": [track.channel] if supported else [],
