@@ -2447,6 +2447,35 @@ def _build_verified_material(obj, chunk):
         return None
 
 
+def _apply_import_transforms(context, created, parent_for, local_by_id,
+                             world_by_id, order, mscale, transform):
+    """F1 affine basis, parent before child, global axis/scale exactly once.
+
+    When a native parent is not constructed, use the verified composed world
+    matrix as a new root and report lost parent semantics.
+    """
+    for node_id in order:
+        obj = created.get(node_id)
+        if obj is None:
+            continue
+        parent_id = parent_for[node_id]
+        parent_obj = created.get(parent_id)
+        try:
+            if parent_obj is not None:
+                obj.parent = parent_obj
+                obj.matrix_parent_inverse = mathutils.Matrix.Identity(4)
+                obj.matrix_basis = (mathutils.Matrix(local_by_id[node_id]) if transform
+                                    else mathutils.Matrix.Identity(4))
+            else:
+                if parent_id is not None:
+                    _import_report.warn("PARENT_OBJECT_UNAVAILABLE")
+                obj.matrix_basis = (mscale @ mathutils.Matrix(world_by_id[node_id])
+                                    if transform else mscale.copy())
+        except (TypeError, ValueError, RuntimeError):
+            _import_report.warn("WORLD_TRANSFORM_UNAPPLIED")
+    context.view_layer.update()
+
+
 def _make_scene_verified(context, settings, mscale, transform, parent):
     """F1 matrix checks and F8 ID-based graph before actual Blender links.
 
@@ -2515,6 +2544,7 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
             geo_seen[key] = "geometry_%d" % len(geo_seen)
     from .maxblend_core.transforms import IDENTITY
     resolved = {}
+    resolved_order = []
     waiting = {node_id: (chunk, parent_id, local, mesh, role) for
                chunk, node_id, parent_id, local, mesh, role, _ in selected}
     # F1 matrix multiplication, bounded topological resolution.
@@ -2526,6 +2556,7 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
             parent_world = resolved[parent_id] if parent_id else IDENTITY
             matrix = tuple(tuple(float(value) for value in row) for row in local)
             resolved[node_id] = multiply(parent_world, matrix)
+            resolved_order.append(node_id)
             del waiting[node_id]
             progressed = True
         if not progressed:
@@ -2573,21 +2604,10 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
             _import_report.objects_created += len(objects)
         except Exception:
             _import_report.warn("NODE_CONSTRUCTION_FAILED")
-    # Parent relationships are tied to validated source indices, never names.
-    for node_id, obj in created.items():
-        parent_id = parent_for[node_id]
-        parent_obj = created.get(parent_id)
-        if parent_id is not None and parent_obj is None:
-            _import_report.warn("PARENT_OBJECT_UNAVAILABLE")
-        if parent_obj is not None:
-            obj.parent = parent_obj
-    context.view_layer.update()
-    for node_id, obj in created.items():
-        try:
-            obj.matrix_world = mscale @ mathutils.Matrix(resolved[node_id]) if transform else mscale.copy()
-        except Exception:
-            _import_report.warn("WORLD_TRANSFORM_UNAPPLIED")
-    context.view_layer.update()
+    # Parent/local basis composition is indexed, not name-keyed. Multiplying
+    # mscale at each child used to double-apply scale and move nested objects.
+    _apply_import_transforms(context, created, parent_for, locals_by_id,
+                             resolved, resolved_order, mscale, transform)
     _import_report.warn("SOURCE_UNIT_FIDELITY_UNVERIFIED")
     _import_report.warn("ANIMATION_AND_LAYER_DATA_UNSUPPORTED")
     return created
