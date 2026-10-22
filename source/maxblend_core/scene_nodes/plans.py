@@ -220,6 +220,8 @@ def _light_issues(light: Light, ev: Evidence) -> list[Diagnostic]:
         issues.append(_diag("light_kind_unsupported", "Unknown/unsupported light class", ev))
     if light.intensity is not None and (not _finite(light.intensity) or light.intensity < 0):
         issues.append(_diag("invalid_light_intensity", "Intensity must be finite and nonnegative", ev, error=True))
+    if light.intensity_unit not in {"SOURCE_UNVERIFIED", "WATTS", "LUMENS", "CANDELA"}:
+        issues.append(_diag("light_unit_unsupported", "Unrecognized light intensity unit", ev))
     if light.intensity is not None and light.intensity_unit == "SOURCE_UNVERIFIED":
         issues.append(_diag("light_intensity_units_unknown", "MAX/renderer intensity units not verified", ev))
     if light.color_linear_rgb is not None and (len(light.color_linear_rgb) != 3 or
@@ -238,7 +240,7 @@ def _light_issues(light: Light, ev: Evidence) -> list[Diagnostic]:
 def _track_issues(track: TransformTrack, ids: set[str], timeline: Timeline) -> list[Diagnostic]:
     issues: list[Diagnostic] = []
     ev = track.evidence
-    if track.target_id is None or track.target_id not in ids:
+    if not _valid_id(track.target_id) or track.target_id not in ids:
         issues.append(_diag("animation_target_missing", "Animation target not found", ev, error=True))
     if track.channel not in _SUPPORTED or track.controller_supported is not True:
         issues.append(_diag("unsupported_controller", "Controller/channel is not supported", ev))
@@ -266,7 +268,7 @@ def _track_issues(track: TransformTrack, ids: set[str], timeline: Timeline) -> l
                 abs(sum(v * v for v in key.value) - 1.0) > 1e-3):
             issues.append(_diag("invalid_rotation_quaternion", "Quaternion is not normalized (w,x,y,z)", ev, error=True))
             break
-        if (timeline.start_frame is not None and timeline.end_frame is not None and
+        if (type(timeline.start_frame) is int and type(timeline.end_frame) is int and
                 (key.frame < timeline.start_frame or key.frame > timeline.end_frame)):
             issues.append(_diag("key_outside_timeline", "Keyframe outside source timeline", ev))
         prev = key.frame
@@ -334,7 +336,7 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
             else:
                 layer_by_id[layer.layer_id] = layer
     for layer in layers:
-        if layer.parent_layer_id is not None and layer.parent_layer_id not in layer_by_id:
+        if layer.parent_layer_id is not None and (not _valid_id(layer.parent_layer_id) or layer.parent_layer_id not in layer_by_id):
             issues.append(_diag("layer_parent_missing", "Missing parent layer", layer.evidence, error=True))
     # Iterative cycle check for layer graph, independent from object parenting.
     walked: set[str] = set()
@@ -346,7 +348,8 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
                 issues.append(_diag("layer_cycle", "Cycle in layer hierarchy", layer_by_id[current].evidence, error=True))
                 break
             chain.add(current)
-            current = layer_by_id[current].parent_layer_id
+            parent = layer_by_id[current].parent_layer_id
+            current = parent if _valid_id(parent) else None
         walked.update(chain)
     ids = set(by_id)
     for item in nodes:
@@ -370,7 +373,7 @@ def build_scene(nodes: tuple[NodeDetails, ...], *, timeline: Timeline | None = N
         visited.update(path)
     for item in nodes:
         for layer in item.layer_ids:
-            if layer not in layer_by_id:
+            if not _valid_id(layer) or layer not in layer_by_id:
                 issues.append(_diag("layer_target_missing", "Assigned layer has no decoded layer record", item.evidence))
         if item.camera is not None and item.camera.target_id is not None and _valid_id(item.camera.target_id) and item.camera.target_id not in ids:
             issues.append(_diag("camera_target_missing", "Referenced camera target is absent", item.evidence, error=True))
@@ -388,7 +391,7 @@ def manifest_animation_summaries(plan: ScenePlan) -> list[dict[str, object]]:
     """
     summaries: list[dict[str, object]] = []
     for index, track in enumerate(plan.tracks):
-        issues = _track_issues(track, {x.node.node_id for x in plan.details}, plan.timeline)
+        issues = _track_issues(track, {x.node.node_id for x in plan.details if _valid_id(x.node.node_id)}, plan.timeline)
         supported = (track.channel in _SUPPORTED and track.controller_supported and
                      bool(track.keys) and track.normalized_values is True and
                      track.target_id is not None and not issues and
