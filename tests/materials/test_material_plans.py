@@ -23,7 +23,7 @@ class MaterialPlannerTests(unittest.TestCase):
             ("PhysicalMtl", {"base_color": [0.6, 0.4, 0.2], "roughness": 0.2,
                              "metalness": 0.9, "ior": 1.45, "transmission": 0.5,
                              "coat_weight": 0.4},
-             "supported", 0.2, None, 1.45),
+             "partial", 0.2, None, 1.45),
         ]
         for family, params, coverage, roughness, opacity, ior in cases:
             with self.subTest(family=family):
@@ -34,11 +34,20 @@ class MaterialPlannerTests(unittest.TestCase):
                 self.assertAlmostEqual(slots["ior"]["value"], ior)
                 self.assertEqual(slots["opacity"]["value"] if slots["opacity"] else None, opacity)
                 self.assertIn("coat", slots)
+                if family == "PhysicalMtl":
+                    self.assertIn("p0_extra_channel_loss", codes(detail))
                 self.assertNotIn("coat", detail.manifest_pbr())
                 self.assertEqual(set(detail.manifest_pbr()), {
                     "base_color", "roughness", "metallic", "normal",
                     "opacity", "ior", "emission",
                 })
+
+    def test_scalar_only_physical_can_be_supported(self):
+        detail = plan_material("mat:plain", {"class": "PhysicalMtl",
+            "params": {"base_color": (0.2, 0.3, 0.4), "metallic": 0.5,
+                       "roughness": 0.4, "ior": 1.45}})
+        self.assertEqual(detail.plan.coverage, "supported")
+        self.assertFalse(detail.plan.diagnostics)
 
     def test_renderer_specific_mapping_is_partial(self):
         cases = [
