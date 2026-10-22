@@ -304,7 +304,7 @@ def plan_material(material_id: str, attributes: Mapping[str, object]) -> Materia
         ds.append(_diag("no_shader_evidence", "Material name alone is not shader fidelity"))
     coverage = ("unsupported" if family is None else
                 "unknown" if not known and family not in _COMPOSITES else
-                "partial" if ds or family != "Physical" else "supported")
+                "partial" if ds or intents or family != "Physical" else "supported")
     counts = {s: sum(d.severity == s for d in ds) for s in ("info", "warning", "error")}
     return MaterialDetail(MaterialPlan(material_id, original, renderer, slots, coverage, tuple(ds)),
                           name, tuple(assignments), tuple(submaterial_ids), tuple(layers),
