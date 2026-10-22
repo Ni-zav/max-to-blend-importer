@@ -90,3 +90,42 @@ Synthetic fixtures validate typed plans, error reporting and schema summaries
 only. Not tested here: real MAX file decoding, animation playback, camera
 projection in Blender, light photometry, parent transforms after unit/axis
 conversion, headless real-scene import, or any native MAX exporter.
+
+## F6/P6 manifest mapping (authoritative Wave 0 v1 shape)
+
+The source and target of every mapping below must be backed by a verified F0
+decoder; a field present in the schema does **not** mean MAX parsing exists.
+
+| F7 decoded plan fact | P0 `maxblend.scene/v1` destination | Wire status / integration owner |
+| --- | --- | --- |
+| `SceneNode.node_id/name/kind/parent_id` | `objects[].id/name/kind/parent_id` | **v1 exists**; F6 stable object-ID mapping; P6 schema validation |
+| normalized `SceneNode.local_matrix` | `objects[].local_matrix` (flatten 16 values) | **v1 exists**; F1 confirms axis/unit conversion once, F6 projects |
+| `NodeDetails.evidence` | `objects[].provenance.evidence` and `objects[].warnings[].evidence` | **v1 exists**, evidence tokens only (no paths); F6/P6 project valid record |
+| missing parents, layer links, camera targets | `objects[].warnings[]`, global `warnings[]` | **v1 exists** for deterministic loss diagnostics |
+| `Timeline.start_frame/end_frame/fps` | `animations[].start_frame/end_frame/fps` | **v1 exists**, only per-animation summary; global timeline is **internal-only** |
+| track `target_id/channel` | `animations[].target_object_id/supported_tracks/unsupported_tracks` | **v1 exists**, coverage is **partial**, not playable |
+| `TransformTrack.keys[].frame/value`, `mode`, verified interpolation | none | **internal only**; requires separately reviewed **versioned schema PR** for faithful interchange |
+| camera projection/FOV/focal/filmback/shift/ortho/clip and `target_id` | `objects[].kind=CAMERA` + warnings only | camera attributes are **internal only**, future **versioned schema PR** |
+| light kind/intensity/unit/color/area/photometry warning | `objects[].kind=LIGHT` + warnings only | light attributes are **internal only**, future **versioned schema PR** |
+| layer names, layer hierarchy, assigned layers, visibility | no typed v1 layer/visibility fields; `objects[].warnings[]` may record known loss | **internal only**, future **versioned schema PR** |
+| unsupported controllers/constraints/rigs/particles | `animations[].unsupported_tracks` and `warnings[]` | **v1 exists as loss reporting**, not supported playback |
+
+F6 should capture a verified camera-target reference only if a native reference
+index was decoded. For a non-NULL `Camera.target_id`, `build_scene`
+rejects an unknown target; `None` remains unknown and must not infer no
+target exists. F6 must not manufacture camera projection, frame rate, light
+intensity or physical-unit conversion. P6 must not add unknown JSON keys to
+the frozen schema to carry the internal plans.
+
+## Gate 1 regression commands (full F0 checkout required)
+
+```sh
+PYTHONPATH=source python -m unittest discover -s tests/scene_nodes -v
+python -m compileall -q source/maxblend_core/scene_nodes tests/scene_nodes
+PYTHONPATH=source python -m unittest discover -s tests/baseline -v
+```
+
+The existing GitHub Wave 0 workflow **does not** run the new
+`tests/scene_nodes` suite. A green extension registration check is not a
+MAX camera/light/animation playback smoke test. No synthetic fixture proves
+binary chunk timings or native MAX controller fidelity.
