@@ -9,6 +9,17 @@ __date__ = "18 Nov 2023"
 
 
 import bpy
+import sys
+
+# Wave 1 modules import the frozen F0 absolute package 'maxblend_core'.
+# Alias *our own* bundled copy during normal Blender extension loading; never
+# silently substitute a different installed add-on's core implementation.
+from . import maxblend_core as _maxblend_core
+_existing_core = sys.modules.get("maxblend_core")
+if _existing_core is not None and _existing_core is not _maxblend_core:
+    raise ImportError("MAXBLEND_CORE_NAMESPACE_COLLISION")
+sys.modules["maxblend_core"] = _maxblend_core
+
 from bpy_extras.io_utils import (
     ImportHelper,
     orientation_helper,
@@ -47,6 +58,12 @@ class ImportMax(bpy.types.Operator, ImportHelper):
         min=0.0, max=10000.0,
         soft_min=0.0, soft_max=10000.0,
         default=1.0,
+    )
+    approved_texture_root: StringProperty(
+        name="Approved Texture Folder",
+        description="Optional explicit local folder; bitmap paths outside are blocked",
+        subtype='DIR_PATH',
+        default="",
     )
     use_image_search: BoolProperty(
         name="Image Search",
@@ -104,6 +121,8 @@ def import_include(layout, operator):
         layrow.prop(operator, "use_image_search")
         layrow.label(text="", icon='OUTLINER_OB_IMAGE' if operator.use_image_search else 'IMAGE_DATA')
         layout.column().prop(operator, "object_filter")
+        layout.prop(operator, "approved_texture_root")
+
         layrow = layout.row(align=True)
         layrow.prop(operator, "use_collection")
         layrow.label(text="", icon='OUTLINER_COLLECTION' if operator.use_collection else 'GROUP')
