@@ -293,7 +293,9 @@ class InstanceGraphPlanner:
                     warn("GEOMETRY_ID_COLLISION", "Shared geometry ID has inconsistent statistics", error=True)
             objects.append(ObjectInstance(
                 node.node_id, item.native_id, node.name, role, node.parent_id,
-                item.source_node_id, item.geometry_id, node.local_matrix, item.world_matrix,
+                item.source_node_id if _valid_id(item.source_node_id) else None,
+                item.geometry_id if _valid_id(item.geometry_id) else None,
+                node.local_matrix, item.world_matrix,
                 slots, overrides, safe_ref, state))
 
         # Topological walk over *both* parent and source edges. Dedupe edges
@@ -341,8 +343,8 @@ class InstanceGraphPlanner:
         effective: dict[str, str | None] = {}
         for key in finish:
             item = indexed[key]
-            resolved = item.geometry_id
-            if item.role == "instance" and item.source_node_id:
+            resolved = item.geometry_id if _valid_id(item.geometry_id) else None
+            if item.role == "instance" and _valid_id(item.source_node_id):
                 inherited = effective.get(item.source_node_id)
                 if resolved and inherited and resolved != inherited:
                     warn("INSTANCE_GEOMETRY_CONFLICT", "Instance geometry differs from referenced source", error=True)
