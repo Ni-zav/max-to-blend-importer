@@ -410,7 +410,8 @@ def manifest_animation_summaries(plan: ScenePlan) -> list[dict[str, object]]:
                          "before": None, "after": None})
         summaries.append({
             "id": f"Animation{index}", "target_object_id": track.target_id if _valid_id(track.target_id) else None,
-            "start_frame": plan.timeline.start_frame, "end_frame": plan.timeline.end_frame,
+            "start_frame": plan.timeline.start_frame if type(plan.timeline.start_frame) is int else None,
+            "end_frame": plan.timeline.end_frame if type(plan.timeline.end_frame) is int else None,
             "fps": plan.timeline.fps if _positive(plan.timeline.fps) and plan.timeline.fps <= 1000 else None,
             "supported_tracks": [track.channel] if supported else [],
             "unsupported_tracks": [] if supported else [track.channel[:80]],
