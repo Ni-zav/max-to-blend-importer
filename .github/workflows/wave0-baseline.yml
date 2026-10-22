@@ -40,5 +40,16 @@ jobs:
           blender --command extension build --source-dir=source --output-dir=dist
           test "$(find dist -maxdepth 1 -name '*.zip' | wc -l)" -eq 1
           unzip -t dist/*.zip
+      - name: Validate and install built extension offline in isolated config
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BLENDER_USER_CONFIG="$RUNNER_TEMP/blender-wave0-user"
+          mkdir -p "$BLENDER_USER_CONFIG" "$RUNNER_TEMP/blender-wave0-repo"
+          blender --command extension validate dist/io_scene_max-1.9.2.zip
+          blender --command extension repo-add wave0_ci --directory="$RUNNER_TEMP/blender-wave0-repo"
+          blender --command extension install-file --repo wave0_ci dist/io_scene_max-1.9.2.zip
+          test -f "$RUNNER_TEMP/blender-wave0-repo/io_scene_max/blender_manifest.toml"
+          test -f "$RUNNER_TEMP/blender-wave0-repo/io_scene_max/__init__.py"
       - name: Headless register and unregister
         run: blender --background --factory-startup --python tests/baseline/blender_smoke.py
