@@ -59,5 +59,12 @@ jobs:
           blender --command extension install-file --repo wave0_ci dist/maxblend_importer_fork-1.9.3.zip
           test -f "$RUNNER_TEMP/blender-wave0-repo/maxblend_importer_fork/blender_manifest.toml"
           test -f "$RUNNER_TEMP/blender-wave0-repo/maxblend_importer_fork/__init__.py"
+      - name: Real installed ZIP default-deny (no native parser, even with experimental acknowledgment)
+        shell: bash
+        run: |
+          set -euo pipefail
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 \
+            --python tests/integration/blender_zip_install_smoke.py -- \
+            "$RUNNER_TEMP/blender-wave0-repo/maxblend_importer_fork"
       - name: Headless register and unregister
-        run: blender --background --factory-startup --python tests/baseline/blender_smoke.py
+        run: blender --background --factory-startup --python-exit-code 1 --python tests/baseline/blender_smoke.py
