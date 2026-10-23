@@ -198,11 +198,13 @@ def materialize(response, context, *, collection=None):
     validate_response(response)
     parent = collection or context.view_layer.active_layer_collection.collection
     created = {}
+    created_meshes = []
     try:
         for item in response["objects"]:
             if item["kind"] == "MESH":
                 blob = item["mesh"]
                 mesh = bpy.data.meshes.new("MAXBLEND geometry")
+                created_meshes.append(mesh)
                 mesh.from_pydata(blob["vertices"], [], blob["faces"])
                 mesh.validate()
                 mesh.update()
@@ -241,6 +243,9 @@ def materialize(response, context, *, collection=None):
     except Exception:
         for obj in created.values():
             bpy.data.objects.remove(obj, do_unlink=True)
+        for mesh in created_meshes:
+            if mesh.users == 0:
+                bpy.data.meshes.remove(mesh)
         raise ImportRejected("WORKER_REPLAY_FAILED") from None
 
 
