@@ -59,8 +59,12 @@ try:
         bogus = Path(tmp) / "never-execute.max"
         bogus.write_bytes(b"BOGUS!!!" + bytes(1536))
         before = len(bpy.data.objects)
-        result = bpy.ops.import_scene.maxblend(filepath=str(bogus), use_image_search=False)
-        assert result == {"CANCELLED"}, result
+        try:
+            result = bpy.ops.import_scene.maxblend(filepath=str(bogus), use_image_search=False)
+            assert result == {"CANCELLED"}, result
+        except RuntimeError as error:
+            # Blender bpy.ops raises for report({'ERROR'}) despite CANCELLED.
+            assert "WORKER_FAILED_OR_RESOURCE_LIMIT" in str(error), str(error)
         assert len(bpy.data.objects) == before, "failed subprocess materialized objects"
     obmesh = bpy.data.meshes.new("Synthetic")
     obmesh.from_pydata([(0,0,0), (1,0,0), (0,1,0)], [], [(0,1,2)])
