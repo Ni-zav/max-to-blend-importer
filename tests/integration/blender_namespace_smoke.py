@@ -4,6 +4,7 @@ from pathlib import Path
 import importlib.util
 import json
 import math
+import subprocess
 import sys
 import tempfile
 
@@ -18,6 +19,7 @@ assert spec and spec.loader
 addon = importlib.util.module_from_spec(spec)
 sys.modules["maxblend_i0_smoke"] = addon
 spec.loader.exec_module(addon)
+assert addon.__version__ == "1.9.3", "Python package/extension identity drift"
 from maxblend_i0_smoke.maxblend_bridge import capture
 
 class FakeOfficialMax(bpy.types.Operator):
@@ -84,12 +86,25 @@ try:
     assert replayed["node_3"].type == 'MESH'
     assert replayed["node_3"]["maxblend.raw_face_material_ids"][0] == 13
     assert replayed["node_3"].data.polygons[0].material_index == 0
-    session = capture(replayed, validated, context=bpy.context)
+    expected_commit = subprocess.check_output(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    session = capture(replayed, validated, context=bpy.context,
+                      importer_commit=expected_commit)
     assert session.resolve("node_3") is replayed["node_3"]
+    try:
+        capture(replayed, validated, context=bpy.context,
+                importer_commit="f" * 40 if expected_commit != "f" * 40 else "e" * 40)
+    except ValueError as error:
+        assert "IMPORTER_COMMIT_MISMATCH" in str(error)
+    else:
+        raise AssertionError("Spoofed importer commit accepted")
     scene = session.scene_manifest
     assert scene["schema_version"] == "maxblend.scene/v1"
     assert scene["status"] == "partial"
-    assert scene["source"]["sha256"] == "a" * 64
+    assert scene["source"] == {
+        "extension": "maxblend_importer_fork", "version": "1.9.3",
+        "commit": expected_commit, "sha256": "a" * 64,
+    }
     assert scene["objects"][0]["geometry"]["face_count"] == 1
     assert scene["objects"][0]["bounds_m"] is None
     assert scene["objects"][0]["local_matrix"] is None
