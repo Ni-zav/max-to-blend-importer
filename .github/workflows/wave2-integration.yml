@@ -31,6 +31,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout real upstream official importer at frozen licensed commit
+        uses: actions/checkout@v4
+        with:
+          repository: nrgsille76/io_scene_max
+          ref: 37db107126f956f7219152671443080360565691
+          path: upstream-official
+          persist-credentials: false
       - name: Download official Blender 4.2 with SHA256 verification (CI only)
         shell: bash
         run: |
@@ -56,3 +63,4 @@ jobs:
           blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/materials/blender_smoke.py
           blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_smoke.py
           blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_namespace_smoke.py
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_official_coexist.py
