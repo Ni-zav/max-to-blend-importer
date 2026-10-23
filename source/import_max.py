@@ -2379,6 +2379,13 @@ def _create_planned_shape(context, settings, node, mat, planned):
         _import_report.warn("NATIVE_FACE_MATERIAL_IDS_UNMAPPED")
     if planned.status != "success":
         _import_report.warn("GEOMETRY_PARTIAL")
+    # Raw native per-face IDs are evidence only. They are NOT Blender slot
+    # indices and must never be assigned as polygon.material_index.
+    if mesh.face_material_ids:
+        obj["maxblend.raw_face_material_ids"] = [
+            native_id if native_id is not None else -1
+            for native_id in mesh.face_material_ids
+        ]
     object_list.append(obj)
     return obj
 
