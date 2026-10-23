@@ -1,14 +1,14 @@
 schema_version = "1.0.0"
-id = "io_scene_max"
-name = "Import Autodesk MAX (.max)"
-version = "1.9.2"
+id = "maxblend_importer_fork"
+name = "MAXBLEND Native MAX Import (Fork)"
+version = "1.9.3"
 tagline = "Import 3DSMAX meshes & materials"
-maintainer = "NRG Sille <nrgsille@gmx.de>"
+maintainer = "Ni-zav (fork); upstream Sebastian Schrand"
 type = "add-on"
 tags = ["Import-Export", "Mesh", "Material"]
 blender_version_min = "4.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
-website = "https://github.com/nrgsille76/io_scene_max"
+website = "https://github.com/Ni-zav/max-to-blend-importer"
 copyright = [
 	"2023-2024 Sebastian Schrand",
 	"2017-2022 Jens M. Plonka",
