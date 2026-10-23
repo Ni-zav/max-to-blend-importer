@@ -6,6 +6,8 @@
 __author__ = "Sebastian Sille <nrgsille@gmail.com>"
 __version__ = "1.9.2"
 __date__ = "18 Nov 2023"
+# Fork identity: see blender_manifest.toml; upstream authorship retained.
+_last_session = None
 
 
 import bpy
@@ -101,12 +103,47 @@ class ImportMax(bpy.types.Operator, ImportHelper):
         import_transform(layout, self)
 
     def execute(self, context):
-        from . import import_max
-        keywords = self.as_keywords(ignore=("axis_forward", "axis_up", "filter_glob"))
-        global_matrix = axis_conversion(from_forward=self.axis_forward, from_up=self.axis_up,).to_4x4()
-        keywords["global_matrix"] = global_matrix
-
-        return import_max.load(self, context, **keywords)
+        """Import only through the external bounded worker, never legacy in-process."""
+        import json
+        import os
+        from mathutils import Matrix
+        from .maxblend_runtime import ImportRejected
+        from .maxblend_isolation import isolated_import
+        from .maxblend_bridge import capture
+        global _last_session
+        _last_session = None
+        try:
+            if len(self.files) > 1:
+                raise ImportRejected("MULTIFILE_IMPORT_REQUIRES_SEPARATE_JOBS")
+            if len(self.files) == 1:
+                filename = os.path.join(self.directory, self.files[0].name)
+            else:
+                filename = self.filepath
+            axes = axis_conversion(
+                from_forward=self.axis_forward, from_up=self.axis_up).to_4x4()
+            scale = axes @ Matrix.Scale(self.scale_objects, 4)
+            if not self.use_apply_matrix:
+                # Keeping legacy flag but not guessing its native semantics.
+                raise ImportRejected("UNAPPLIED_NATIVE_MATRIX_UNSUPPORTED")
+            if self.approved_texture_root:
+                # Source image decoders are blocked in the sandboxed MVP.
+                raise ImportRejected("EXTERNAL_TEXTURE_DECODING_UNSUPPORTED")
+            objects, response = isolated_import(
+                os.path.abspath(filename), context, global_matrix=scale,
+                object_filter=set(self.object_filter), use_collection=self.use_collection)
+            _last_session = capture(objects, response, context=context)
+            # This is strict scene/v1 with nullable unknown physical quantities,
+            # NOT proof of a complete/max-fidelity conversion.
+            context.scene["maxblend_scene_v1"] = json.dumps(
+                _last_session.scene_manifest, separators=(",", ":"))
+            self.report({'WARNING'}, "MAX imported as partial isolated preview; unknown source fidelity")
+            return {'FINISHED'}
+        except ImportRejected as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        except Exception:
+            self.report({'ERROR'}, "ISOLATED_IMPORT_INTERNAL_FAILURE")
+            return {'CANCELLED'}
 
     def invoke(self, context, event):
         return self.invoke_popup(context)
@@ -157,6 +194,11 @@ def menu_func(self, context):
     self.layout.operator(ImportMax.bl_idname, text="MAXBLEND Fork (.max)")
 
 
+def get_last_import_session():
+    """P6 receives real bpy references only within this host session."""
+    return _last_session
+
+
 def register():
     bpy.utils.register_class(ImportMax)
     bpy.utils.register_class(IO_FH_max)
@@ -164,6 +206,8 @@ def register():
 
 
 def unregister():
+    global _last_session
+    _last_session = None
     bpy.types.TOPBAR_MT_file_import.remove(menu_func)
     bpy.utils.unregister_class(IO_FH_max)
     bpy.utils.unregister_class(ImportMax)
