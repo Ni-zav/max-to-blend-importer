@@ -131,11 +131,21 @@ class ImportMax(bpy.types.Operator, ImportHelper):
             objects, response = isolated_import(
                 os.path.abspath(filename), context, global_matrix=scale,
                 object_filter=set(self.object_filter), use_collection=self.use_collection)
-            _last_session = capture(objects, response, context=context)
-            # This is strict scene/v1 with nullable unknown physical quantities,
-            # NOT proof of a complete/max-fidelity conversion.
-            context.scene["maxblend_scene_v1"] = json.dumps(
-                _last_session.scene_manifest, separators=(",", ":"))
+            try:
+                _last_session = capture(objects, response, context=context)
+                # Strict scene/v1: physical transforms/bounds remain null until
+                # independently verified source units and axes are available.
+                context.scene["maxblend_scene_v1"] = json.dumps(
+                    _last_session.scene_manifest, separators=(",", ":"))
+            except Exception:
+                # Canonical projection/publication is atomic with replay.
+                for obj in objects.values():
+                    mesh = obj.data if obj.type == 'MESH' else None
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                    if mesh is not None and mesh.users == 0:
+                        bpy.data.meshes.remove(mesh)
+                _last_session = None
+                raise ImportRejected("SCENE_BRIDGE_FAILED") from None
             self.report({'WARNING'}, "MAX imported as partial isolated preview; unknown source fidelity")
             return {'FINISHED'}
         except ImportRejected as exc:
