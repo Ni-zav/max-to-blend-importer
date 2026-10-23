@@ -1,8 +1,8 @@
 schema_version = "1.0.0"
 id = "maxblend_importer_fork"
-name = "MAXBLEND Native MAX Import (Fork)"
+name = "MAXBLEND Experimental MAX Preview (Fork)"
 version = "1.9.3"
-tagline = "Import 3DSMAX meshes & materials"
+tagline = "Experimental Linux-only MAX preview, not production-safe"
 maintainer = "Ni-zav (fork); upstream Sebastian Schrand"
 type = "add-on"
 tags = ["Import-Export", "Mesh", "Material"]
@@ -15,7 +15,7 @@ copyright = [
 	"2005-2018 Philippe Lagadec"
 ]
 [permissions]
-files = "Import Autodesk MAX files"
+files = "Experimental preview of trusted MAX files from reviewed Git source only"
 
 
 
