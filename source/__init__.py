@@ -46,7 +46,7 @@ if "bpy" in locals():
 class ImportMax(bpy.types.Operator, ImportHelper):
     """Import Autodesk MAX"""
     bl_idname = "import_scene.maxblend"
-    bl_label = "MAXBLEND Import (.max)"
+    bl_label = "MAXBLEND EXPERIMENTAL Preview (.max)"
     bl_options = {'PRESET', 'UNDO'}
 
     filename_ext = ".max"
@@ -88,6 +88,14 @@ class ImportMax(bpy.types.Operator, ImportHelper):
         description="Create a new collection",
         default=False,
     )
+    experimental_ack: BoolProperty(
+        name="I accept experimental MAX parsing risk",
+        description=("Experimental Linux-only preview from a clean reviewed Git checkout. "
+                     "No syscall/network sandbox: use only trusted files in a disposable VM. "
+                     "ZIP installation is not authorized to parse files."),
+        default=False,
+        options={'SKIP_SAVE'},
+    )
     use_apply_matrix: BoolProperty(
         name="Apply Matrix",
         description="Use matrix to transform the objects",
@@ -99,6 +107,8 @@ class ImportMax(bpy.types.Operator, ImportHelper):
         layout.use_property_split = True
         layout.use_property_decorate = False
 
+        layout.label(text="EXPERIMENTAL ONLY - NOT SAFE FOR UNTRUSTED MAX", icon='ERROR')
+        layout.prop(self, "experimental_ack")
         import_include(layout, self)
         import_transform(layout, self)
 
@@ -113,6 +123,8 @@ class ImportMax(bpy.types.Operator, ImportHelper):
         global _last_session
         _last_session = None
         try:
+            if self.experimental_ack is not True:
+                raise ImportRejected("EXPERIMENTAL_IMPORT_ACK_REQUIRED")
             if len(self.files) > 1:
                 raise ImportRejected("MULTIFILE_IMPORT_REQUIRES_SEPARATE_JOBS")
             if len(self.files) == 1:
@@ -130,7 +142,8 @@ class ImportMax(bpy.types.Operator, ImportHelper):
                 raise ImportRejected("EXTERNAL_TEXTURE_DECODING_UNSUPPORTED")
             objects, response = isolated_import(
                 os.path.abspath(filename), context, global_matrix=scale,
-                object_filter=set(self.object_filter), use_collection=self.use_collection)
+                object_filter=set(self.object_filter), use_collection=self.use_collection,
+                experimental_ack=self.experimental_ack)
             try:
                 _last_session = capture(objects, response, context=context)
                 # Strict scene/v1: physical transforms/bounds remain null until
@@ -201,7 +214,7 @@ class IO_FH_max(bpy.types.FileHandler):
 
 
 def menu_func(self, context):
-    self.layout.operator(ImportMax.bl_idname, text="MAXBLEND Fork (.max)")
+    self.layout.operator(ImportMax.bl_idname, text="MAXBLEND Experimental Preview (.max)")
 
 
 def get_last_import_session():
