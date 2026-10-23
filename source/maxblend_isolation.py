@@ -107,7 +107,10 @@ def validate_response(response):
         raise ImportRejected("WORKER_SCHEMA_INVALID")
     if response.get("status") not in ("partial", "unsupported", "failed"):
         raise ImportRejected("WORKER_STATUS_INVALID")
-    digest = response.get("source_sha256")\n    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):\n        raise ImportRejected("WORKER_SOURCE_DIGEST_INVALID")\n    objects = response.get("objects")
+    digest = response.get("source_sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ImportRejected("WORKER_SOURCE_DIGEST_INVALID")
+    objects = response.get("objects")
     if not isinstance(objects, list) or len(objects) > MAX_OBJECTS:
         raise ImportRejected("WORKER_OBJECT_LIMIT")
     identifiers = set()
