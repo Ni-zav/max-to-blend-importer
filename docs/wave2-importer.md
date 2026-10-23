@@ -74,6 +74,9 @@ scene = session.scene_manifest
 object_map = session.objects_by_id
 assert scene["schema_version"] == "maxblend.scene/v1"
 assert scene["status"] == "partial"
+assert scene["source"]["extension"] == "maxblend_importer_fork"
+assert scene["source"]["version"] == "1.9.3"
+assert scene["source"]["commit"] is not None  # clean checked-out HEAD
 ```
 
 For P6, `session.resolve(node_id)` returns an actual `bpy.types.Object`
@@ -82,6 +85,30 @@ reference and not a serialized pointer. `objects_by_id` uses unique
 authenticated permanent native object handles. The local parent receives
 `source_sha256` computed from the exact verified input snapshot. Source
 paths and private client object metadata are never printed to CI.
+
+The canonical scene source identity now consists of the verified importer
+extension ID `maxblend_importer_fork`, Python/manifest version `1.9.3`,
+and the **actual clean Git HEAD** of the checked-out code that was imported.
+`source.extension` is the **importer extension ID** and not the input file
+suffix `.max`. `source.sha256` still refers to the verified input byte
+snapshot and must not be confused with a source code checksum.
+
+The F6 bridge obtains `source.commit` using `git rev-parse --verify HEAD^{commit}`
+from the parent of the loaded `source/maxblend_bridge.py`, checks that the
+Git top-level directory matches that source checkout, verifies Python and
+Blender-manifest identities, and rejects dirty/untracked `source/**` paths.
+A caller-provided SHA is an **expected pin to compare**, never a value to copy
+into the manifest. A missing Git checkout, mismatched expected pin, dirty
+checkout or manifest-version mismatch all cause an error and rollback.
+A compiled ZIP-only extension **cannot** assert a trusted commit by reading
+its own version string: it fails closed until an independently approved,
+versioned release-build attestation mechanism is established. This strict
+mechanism is appropriate for I0/P6's explicit, independently verified Git
+checkout in Blender 4.2 CI and does not pretend that arbitrary local Git
+metadata is a signed release. P6 must independently inspect and approve the
+specific source checkout and require the same commit in its canonical receipt.
+The reviewed candidate SHA must **not** populate P6's production-approved
+*merge SHA* field until an independent, authorized merge.
 
 The canonical scene item meets strict P0 v1 field requirements as a **partial
 observational manifest**. It describes measured created Blender
