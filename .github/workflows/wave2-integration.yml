@@ -47,8 +47,8 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           blender --command extension build --source-dir=source --output-dir=dist
-          blender --command extension validate dist/io_scene_max-1.9.2.zip
-          unzip -t dist/io_scene_max-1.9.2.zip
+          blender --command extension validate dist/maxblend_importer_fork-1.9.3.zip
+          unzip -t dist/maxblend_importer_fork-1.9.3.zip
       - name: Baseline registration + material + integration smoke (fatal on Python failures)
         shell: bash
         run: |
