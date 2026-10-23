@@ -127,7 +127,7 @@ def validate_response(response):
             raise ImportRejected("WORKER_NAME_INVALID")
         mat = item.get("world")
         if not isinstance(mat, list) or len(mat) != 16 or any(
-                type(v) not in (int, float) or not math.isfinite(v) for v in mat):
+                type(v) not in (int, float) or not math.isfinite(v) or abs(v) > 1e9 for v in mat):
             raise ImportRejected("WORKER_MATRIX_INVALID")
         if tuple(round(x, 7) for x in mat[12:]) != (0, 0, 0, 1):
             raise ImportRejected("WORKER_MATRIX_NONAFFINE")
@@ -170,7 +170,7 @@ def validate_response(response):
                     raise ImportRejected("WORKER_UV_COUNT_INVALID")
                 for co in coords:
                     if not isinstance(co, list) or len(co) != 2 or any(
-                            type(x) not in (int, float) or not math.isfinite(x) for x in co):
+                            type(x) not in (int, float) or not math.isfinite(x) or abs(x) > 1e9 for x in co):
                         raise ImportRejected("WORKER_UV_VALUE_INVALID")
         parent = item.get("parent")
         if parent is not None and not _ID.fullmatch(str(parent)):
