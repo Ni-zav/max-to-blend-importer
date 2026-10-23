@@ -72,7 +72,14 @@ def snapshot_objects(objects):
                 })
             if len(uv) > 16:
                 raise ValueError("UV_LAYER_LIMIT")
-            record["mesh"] = {"vertices": vs, "faces": fs, "uv": uv}
+            face_ids = obj.get("maxblend.raw_face_material_ids")
+            native_ids = None
+            if face_ids is not None:
+                native_ids = list(face_ids)
+                if len(native_ids) != len(fs):
+                    raise ValueError("NATIVE_FACE_IDS_INVALID")
+            record["mesh"] = {"vertices": vs, "faces": fs, "uv": uv,
+                              "native_face_ids": native_ids}
         result.append(record)
     return result
 
