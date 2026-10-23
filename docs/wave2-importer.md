@@ -1,49 +1,149 @@
-# F6 — Wave 2 guarded importer integration
+# F6 / I0 importer follow-up — security and P6 handoff
 
 SPDX-License-Identifier: GPL-2.0-or-later
 
-Status: integration candidate, **not** a certified .max conversion pipeline.
+**Status: synthetic-tested integration candidate, NOT production release.**
+No authorized redistributable genuine MAX binary fixture exists in public CI;
+native MAX fidelity, source-unit conversion and renderer graph recovery are unverified.
 
-## What the fork actually does
+## Namespace / supported host
 
-1. The existing Blender 4.2+ File > Import operator import_scene.max selects a local MAX file. A POSIX descriptor-relative no-follow open checks a regular file and F5 probes its CFB container before any legacy MAX parser executes. A bounded (128 MiB) immutable snapshot is preflighted again and passed as bytes to the legacy parser, avoiding reopening the source path.
-2. The chunk dispatcher enforces 48 levels, 250,000 decoded chunks and valid frame boundaries before recursive chunk creation. Compressed native scenes and unsupported CFB/ZIP wrappers fail closed; a passed CFB structural preflight is **not** validated native MAX semantics.
-3. F2 reconstructs decoded Editable Mesh and Editable Poly topology and complete indexed UV-map payloads, preserving raw per-face MAX material IDs. It will not invent a native Multi/Sub material-ID to Blender slot mapping.
-4. F3 translates a restricted set of legacy decoded Standard, Physical, V-Ray and Corona parameter values to explicit preview Principled nodes; coverage for unknown renderer material graphs is partial. F4 locates images **only** when the user explicitly approves a local texture folder. No search over arbitrary absolute native paths, no automatic external download or cloud conversion.
-5. F1 checks finite affine transforms and composes hierarchies by stable document-local node indices; physical source units, axes, pivot-offset semantics and evaluated modifiers remain independently unverified. F7 validates decoded graph hints and reports unverified camera, light, layers and animation semantics instead of fabricating data. F8 validates and plans source-index geometry references, reusing Blender mesh data only where material override uncertainty allows.
-6. Results are stored locally on the active scene at maxblend_last_import_report as JSON schema maxblend.import/v1, with success|partial|failed|unsupported status, created-object/material/link counts, and path-free trusted warning codes. These are counts created by this importer, **not** original MAX scene-fidelity claims. Native MAX export is always false.
+- Blender 4.2+ extension ID: `maxblend_importer_fork`; version: `1.9.3`.
+- Runtime operator: `bpy.ops.import_scene.maxblend`; file handler:
+  `IO_FH_maxblend`. No `export_scene.max` and no native MAX writer.
+- This fork **never registers** the old `import_scene.max` alias. That
+  identifier belongs to the official `io_scene_max`. Legacy operator
+  scripts must explicitly migrate to `maxblend`. Shared option/property
+  names remain when meaningful; potentially unsafe legacy switches fail closed.
+- Official-first and fork-first registration smoke tests verify both operator
+  identifiers persist independently, and uninstalling the fork leaves the
+  official namespace intact.
+- Strict worker runs **only on Linux** with POSIX O_NOFOLLOW/openat,
+  rlimit, process group cancellation. Windows and macOS fail closed.
+  This is NOT an OS namespace, seccomp or VM sandbox: advanced adversarial
+  isolation remains an independent I0 requirement.
 
-## Critical limitations and independent I0 gates
+## Architecture / process isolation
 
-- There is no redistributable approved native MAX file fixture in CI. **Real native .max import, baseline parity on genuine scenes, measurements against 3ds Max, full camera/light/animation support and material fidelity are NOT TESTED.** Blender-built synthetic scene and bounded F5 CFB probes cannot establish native conversion fidelity.
-- Strict secure-open relies on POSIX O_NOFOLLOW and O_DIRECTORY. This implementation fails closed on Windows (SECURE_OPEN_UNAVAILABLE) instead of claiming an unimplemented secure Windows descriptor path. An independently tested native Windows safe-open capability is required before a Windows release.
-- The upstream manifest ID io_scene_max and operator ID import_scene.max remain unchanged for Wave 0 backwards-compatibility assertions. **This extension cannot be enabled alongside the official io_scene_max extension.** A separately reviewed namespaced addon/registration migration and conditional compatibility alias is required for official-first and fork-first coexistence.
-- MAX system units and source axes are not independently decoded and verified. F1 cannot manufacture normalization; displayed geometry sizes and world bounds must be independently checked before reporting physical correctness.
-- Native per-face Multi/Sub IDs are never assumed to be zero-based Blender indices; final slot assignment requires a vetted native ID -> ordered F3 material-slot mapping. Renderer graph fidelity, UV variants, texture color-space rules and source image integrity need further validation.
-- An F5-eligible CFB header is not proof of a safe hostile input. Python and Blender can still crash or stall during legacy scene parsing or approved image decoding. Separate-process isolation, timeouts/resource constraints, memory and CPU budgets, and further parser-level fuzzing are release requirements.
-- This report is **not** the frozen strict P0 maxblend.scene/v1 manifest. P6 must separately validate and derive any v1 object/material provenance from verified decoder evidence. Camera/light physical fields, actual animation keys, layer state and instance identity need a separately reviewed versioned schema, not invented additional v1 fields.
-- No export_scene.max registration or supported native MAX writer exists.
+1. The interactive Blender operator prepares a strict, private, mode-0600
+   request and launches a separate factory-startup Blender process.
+   Command uses argv, no shell, `--disable-autoexec`, `--python-exit-code 1`,
+   no user startup script directories and no required network service.
+2. Child Linux process has `RLIMIT_AS=8 GiB`, `RLIMIT_CPU=20s`
+   (hard 22s), `RLIMIT_FSIZE=32 MiB`, `RLIMIT_CORE=0`. Parent enforces
+   a 30-second wall-time, kills the entire process group on expiry and
+   accepts only exit code zero.
+3. Inside child, F5 structurally preflights an approved no-follow regular
+   local file and parses identical immutable input bytes (max 128 MiB)
+   using bounded legacy chunks. This is **not** semantic proof of a valid
+   native MAX. Compressed/unsupported containers are rejected.
+4. Only validated mesh coordinates, per-face topology, UV loops, opaque
+   document-local source-node IDs, parent relationships and finite Blender
+   world matrices are transferred through a separate max-24-MiB private
+   JSON payload. Each result is capped at 512 objects, 200k vertices,
+   300k faces, 600k loops. The parent revalidates schema, limits, finite
+   matrices, face indices, duplicate IDs and parent cycles before constructing
+   fresh Blender mesh datablocks. It never loads a Blender scene file from
+   the child, registers client scripts or trusts child Blender code.
+5. Native bitmap decoding, renderer-specific materials, animations, cameras,
+   external proxies and source scripts are **not replayed** into the parent.
+   No native texture path is used. Raw face MAX material IDs may be exposed
+   only as an internal evidentiary sidecar; they are **not** zero-based
+   Blender material slots.
+6. On failure, worker nonzero/timeout/resource overrun always returns a
+   path-free error with no successful import status. No client input or
+   derived geometry is uploaded to public CI.
 
-## Local validation and CI
+This is bounded resource isolation, not a proof against malicious parser
+memory corruption, container escapes, kernel vulnerabilities, or operating
+system attack surface. A disposable machine/VM and explicit trust boundary
+remain appropriate for hostile inputs.
 
-Commands, run from repository root:
+## Frozen P0 `maxblend.scene/v1` bridge
 
-    python -m compileall -q source tests
-    for suite in baseline transforms geometry materials textures container scene_nodes instances integration; do
-      PYTHONPATH=source python -m unittest discover -s tests/$suite -p 'test_*.py' -v
-    done
-    blender --command extension build --source-dir=source --output-dir=dist
-    blender --command extension validate dist/io_scene_max-1.9.2.zip
-    blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/baseline/blender_smoke.py
-    blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/materials/blender_smoke.py
-    blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_smoke.py
+In the *same Blender process* after successful partial import:
 
-The above deterministic synthetic suites, extension build and Blender 4.2 smoke tests are in .github/workflows/wave2-integration.yml. CI downloads an official verified Blender binary solely in the CI build environment; the installed importer makes no runtime network call.
+```python
+import bpy
+# Blender Extensions installation path varies by configured repository.
+# Resolve the enabled extension by the manifest ID, not the old operator.
+import bl_ext.user_default.maxblend_importer_fork as addon
+session = addon.get_last_import_session()
+assert session is not None
+scene = session.scene_manifest
+object_map = session.objects_by_id
+assert scene["schema_version"] == "maxblend.scene/v1"
+assert scene["status"] == "partial"
+```
 
-No customer MAX file, texture, image, screenshot, source path, object name or metadata may be uploaded to the public fork, public PR, issue, CI, CI artifact, logs or external service.
+For P6, `session.resolve(node_id)` returns an actual `bpy.types.Object`
+reference and not a serialized pointer. `objects_by_id` uses unique
+`node_N` *document-local parsed scene-chunk indexes*, not Max's independently
+authenticated permanent native object handles. The local parent receives
+`source_sha256` computed from the exact verified input snapshot. Source
+paths and private client object metadata are never printed to CI.
 
-## P6 handoff
+The canonical scene item meets strict P0 v1 field requirements as a **partial
+observational manifest**. It describes measured created Blender
+object/mesh/face/triangle/UV counts with `provenance.method="derived"`
+and bounded Scene record indexes. Because source physical units, source axis
+convention, pivot and MAX shader mappings are unknown, `source_units`
+is null, `axes` is unknown, physical world/local matrices and
+`bounds_m` are null, and `face_material_ids` is null. The
+`transforms.values_in_meters` v1 contract remains true because **no
+unverified metric values are emitted**. This avoids relabeling assumed
+Blender world coordinates as verified real-world meters. P6 must not
+infer scene fidelity or native geometry placement from an object count.
 
-P6 should pin this fork's exact verified commit, invoke import_scene.max only if this fork owns that operator, inspect the local MAXBLEND scene report after the invocation in the *same Blender host process*, and combine F6 partial/unsupported outcomes with P1/P2/P3/P7 downstream diagnostics. P6 must not treat maxblend.import/v1 as the strict maxblend.scene/v1 interchange schema. A verified semantic manifest adapter, safe process isolation and F1 units/geometry measurements are independent P6/I0 release gates.
+The `maxblend.import/v1` scene custom property is a **separate**
+operator status/report, not the strict scene manifest. The same host
+also stores local `maxblend_scene_v1`, but P6 should prefer live session
+references and separately validate the v1 schema before any export.
 
-Upstream provenance: Sebastian Schrand, Jens M. Plonka and Philippe Lagadec retain their original source notices. The Blender extension manifest retains its GPL-3.0-or-later license declaration; core source SPDX remains GPL-2.0-or-later.
+If a user closes/unregisters the extension, session references expire.
+P6 must pin an exact trusted fork commit independently; the schema's
+`source.commit` may remain null when the addon cannot attest its exact
+installed repository commit. Never guess a SHA.
+
+## Independently unverified native semantics / I0 gate
+
+- No legally distributable native `.max` fixture and no independently
+  measured Max-to-Blender dimensions, renderer material parity or version matrix.
+- No authenticated source system units, native axis basis, per-face native
+  Multi/Sub material-ID-to-slot table, advanced provenance, real camera/light
+  parameter decoding, animation tracks, procedural modifiers or renderer proxies.
+- F2/Blender synthesized geometry tests, F1 mirrored parent transforms,
+  synthetic F3 shader-node smoke, official-first/fork-first registration,
+  Linux worker timeout/resource tests, invalid container/replay tests,
+  Blender 4.2 extension build and packaging are **tests of the implementation**
+  and not genuine native MAX conversion verification.
+- Worker subprocess uses POSIX resource limits but not a kernel syscall-deny
+  sandbox. Harden with VM/seccomp/landlock, process monitoring and authorized
+  genuine test cases before production security claims.
+- P6 must implement trusted ConversionPort in the same owning Blender host,
+  pin the merged fork SHA, incorporate F6 partial warnings into P1/P2 audit,
+  refrain from repairs without independent evidence and validate later
+  export reimports. Platform USD output packaging currently remains a
+  separately reviewed problem; F6 does not alter platform export policy.
+- Native MAX writing is neither implemented nor advertised.
+
+## Regression commands
+
+```sh
+python -m compileall -q source tests
+for suite in baseline transforms geometry materials textures container scene_nodes instances integration; do
+  PYTHONPATH=source python -m unittest discover -s "tests/$suite" -p 'test_*.py' -v
+done
+blender --command extension build --source-dir=source --output-dir=dist
+blender --command extension validate dist/maxblend_importer_fork-1.9.3.zip
+blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/baseline/blender_smoke.py
+blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/materials/blender_smoke.py
+blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_smoke.py
+blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_namespace_smoke.py
+```
+
+Upstream attribution and license: Sebastian Schrand, Jens M. Plonka,
+Philippe Lagadec and their original code provenance remain in source
+headers. The extension manifest declares GPL-3.0-or-later; the importer
+source retains GPL-2.0-or-later. No customer MAX files, texture data,
+screenshots or derived assets may be uploaded to public repositories or CI.
