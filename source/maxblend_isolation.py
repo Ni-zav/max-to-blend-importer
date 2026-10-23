@@ -139,6 +139,11 @@ def validate_response(response):
                 raise ImportRejected("WORKER_MESH_MISSING")
             verts, faces = mesh.get("vertices"), mesh.get("faces")
             uvs = mesh.get("uv", [])
+            raw_ids = mesh.get("native_face_ids")
+            if raw_ids is not None and (
+                    not isinstance(raw_ids, list) or len(raw_ids) != len(faces)
+                    or any(type(x) is not int or not -1 <= x <= 65535 for x in raw_ids)):
+                raise ImportRejected("WORKER_NATIVE_FACE_IDS_INVALID")
             if not isinstance(verts, list) or not isinstance(faces, list) or not isinstance(uvs, list):
                 raise ImportRejected("WORKER_MESH_INVALID")
             total_vertices += len(verts)
@@ -206,6 +211,8 @@ def materialize(response, context, *, collection=None):
                     for idx, co in enumerate(channel["coords"]):
                         layer.data[idx].uv = co
                 obj = bpy.data.objects.new(item["name"], mesh)
+                if blob.get("native_face_ids") is not None:
+                    obj["maxblend.raw_face_material_ids"] = blob["native_face_ids"]
             else:
                 obj = bpy.data.objects.new(item["name"], None)
             parent.objects.link(obj)
