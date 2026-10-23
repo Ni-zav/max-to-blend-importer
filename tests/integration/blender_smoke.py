@@ -26,7 +26,7 @@ from maxblend_core.materials.blender_nodes import build_material
 
 addon.register()
 try:
-    assert bpy.ops.import_scene.max.get_rna_type().identifier == "IMPORT_SCENE_OT_max"
+    assert bpy.ops.import_scene.maxblend.get_rna_type().identifier == "IMPORT_SCENE_OT_maxblend"
     # Real Blender mesh datablock with per-loop UV seam and raw MAX face IDs.
     verts = [(0, 0, 0), (2, 0, 0), (2, 3, 0), (0, 3, 0)]
     v = struct.pack("<I", 4) + b"".join(struct.pack("<3f", *p) for p in verts)
