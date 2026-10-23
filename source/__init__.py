@@ -4,7 +4,7 @@
 
 
 __author__ = "Sebastian Sille <nrgsille@gmail.com>"
-__version__ = "1.9.2"
+__version__ = "1.9.3"
 __date__ = "18 Nov 2023"
 # Fork identity: see blender_manifest.toml; upstream authorship retained.
 _last_session = None
