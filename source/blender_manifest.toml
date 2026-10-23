@@ -15,7 +15,7 @@ copyright = [
 	"2005-2018 Philippe Lagadec"
 ]
 [permissions]
-files = "Experimental preview of trusted MAX files from reviewed Git source only"
+files = "Experimental preview of locally trusted MAX files"
 
 
 
