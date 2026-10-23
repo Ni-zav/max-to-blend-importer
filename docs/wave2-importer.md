@@ -2,7 +2,22 @@
 
 SPDX-License-Identifier: GPL-2.0-or-later
 
-**Status: synthetic-tested integration candidate, NOT production release.**
+**Status: synthetic-tested EXPERIMENTAL integration candidate, NOT production release.**
+See [F6 experimental merge qualification](f6-experimental-merge-gate.md)
+for separate internal experimental-merge vs production-fidelity criteria.
+
+**Native MAX parsing is explicitly disabled by default.** An interactive or
+programmatic import must set the per-operation `experimental_ack=True` on a
+clean, reviewable Linux Git checkout of this exact addon source, and should
+only be used with trusted test inputs inside an externally isolated disposable
+VM. No operator call, even from a verified checkout, starts a native parser
+without this opt-in; the option is never saved in UI presets.
+An ordinary installed Blender extension ZIP can register, but **cannot import
+MAX files**, even with acknowledgment, because its packaged source has no
+verifiable reviewed Git checkout. The offline ZIP install smoke tests refusal,
+not a functional production importer. No in-process parser fallback is allowed.
+This flag and the Git checkout gate do **not** establish a syscall/network
+sandbox, secure deployment or fidelity.
 No authorized redistributable genuine MAX binary fixture exists in public CI;
 native MAX fidelity, source-unit conversion and renderer graph recovery are unverified.
 
@@ -127,10 +142,12 @@ operator status/report, not the strict scene manifest. The same host
 also stores local `maxblend_scene_v1`, but P6 should prefer live session
 references and separately validate the v1 schema before any export.
 
-If a user closes/unregisters the extension, session references expire.
-P6 must pin an exact trusted fork commit independently; the schema's
-`source.commit` may remain null when the addon cannot attest its exact
-installed repository commit. Never guess a SHA.
+If the user closes/unregisters the extension, session references expire.
+P6 must independently verify the exact trusted fork source checkout. The
+canonical adapter fails closed rather than emitting a null or invented
+`source.commit`; a ZIP-only install therefore cannot produce a successful
+import session. The `source.commit` field in a successful partial manifest
+must match the actual clean Git checkout of the loaded addon code.
 
 ## Independently unverified native semantics / I0 gate
 
@@ -147,6 +164,10 @@ installed repository commit. Never guess a SHA.
 - Worker subprocess uses POSIX resource limits but not a kernel syscall-deny
   sandbox. Harden with VM/seccomp/landlock, process monitoring and authorized
   genuine test cases before production security claims.
+- This experimentally opt-in source importer is not a production-grade
+  installation or hostile-file converter. See the separate
+  [experimental qualification gate](f6-experimental-merge-gate.md); never
+  interpret successful ZIP install as verified operational import.
 - P6 must implement trusted ConversionPort in the same owning Blender host,
   pin the merged fork SHA, incorporate F6 partial warnings into P1/P2 audit,
   refrain from repairs without independent evidence and validate later
