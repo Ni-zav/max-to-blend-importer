@@ -107,7 +107,7 @@ def validate_response(response):
         raise ImportRejected("WORKER_SCHEMA_INVALID")
     if response.get("status") not in ("partial", "unsupported", "failed"):
         raise ImportRejected("WORKER_STATUS_INVALID")
-    objects = response.get("objects")
+    digest = response.get("source_sha256")\n    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):\n        raise ImportRejected("WORKER_SOURCE_DIGEST_INVALID")\n    objects = response.get("objects")
     if not isinstance(objects, list) or len(objects) > MAX_OBJECTS:
         raise ImportRejected("WORKER_OBJECT_LIMIT")
     identifiers = set()
@@ -210,12 +210,22 @@ def materialize(response, context, *, collection=None):
             obj["maxblend.provenance"] = "Scene:index"
             # Original raw chunk ID is document-local, not an asserted native GUID.
             created[item["id"]] = obj
-        for item in response["objects"]:
-            obj = created[item["id"]]
-            if item.get("parent"):
-                obj.parent = created[item["parent"]]
-            world = [item["world"][i:i+4] for i in (0, 4, 8, 12)]
-            obj.matrix_world = Matrix(world)
+        pending = {item["id"]: item for item in response["objects"]}
+        while pending:
+            progressed = False
+            for ident, item in list(pending.items()):
+                parent_id = item.get("parent")
+                if parent_id is not None and parent_id in pending:
+                    continue
+                obj = created[ident]
+                if parent_id is not None:
+                    obj.parent = created[parent_id]
+                world = [item["world"][i:i+4] for i in (0, 4, 8, 12)]
+                obj.matrix_world = Matrix(world)
+                del pending[ident]
+                progressed = True
+            if not progressed:
+                raise ImportRejected("WORKER_PARENT_CYCLE")
         context.view_layer.update()
         return created
     except Exception:
