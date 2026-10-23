@@ -61,11 +61,22 @@ try:
         bogus = Path(tmp) / "never-execute.max"
         bogus.write_bytes(b"BOGUS!!!" + bytes(1536))
         before = len(bpy.data.objects)
+        # Every ordinary install/API call is default-deny, before native IO.
         try:
-            result = bpy.ops.import_scene.maxblend(filepath=str(bogus), use_image_search=False)
+            result = bpy.ops.import_scene.maxblend(
+                filepath=str(bogus), use_image_search=False)
             assert result == {"CANCELLED"}, result
         except RuntimeError as error:
-            # Blender bpy.ops raises for report({'ERROR'}) despite CANCELLED.
+            assert "EXPERIMENTAL_IMPORT_ACK_REQUIRED" in str(error), str(error)
+        assert len(bpy.data.objects) == before
+        # Only an explicitly acknowledged, clean-Git experiment reaches the
+        # actual constrained subprocess; bogus source must still fail closed.
+        try:
+            result = bpy.ops.import_scene.maxblend(
+                filepath=str(bogus), use_image_search=False,
+                experimental_ack=True)
+            assert result == {"CANCELLED"}, result
+        except RuntimeError as error:
             assert "WORKER_FAILED_OR_RESOURCE_LIMIT" in str(error), str(error)
         assert len(bpy.data.objects) == before, "failed subprocess materialized objects"
     obmesh = bpy.data.meshes.new("Synthetic")
@@ -111,6 +122,6 @@ try:
     assert scene["objects"][0]["face_material_ids"] is None
     assert scene["source_units"]["meters_per_unit"] is None
     assert scene["axes"]["handedness"] == "UNKNOWN"
-    print("F6 I0 Blender 4.2 smoke PASS: official-first/fork-first, hostile worker reject, canonical partial session")
+    print("F6 I0 Blender 4.2 smoke PASS: dual namespace, default deny, experimental subprocess rejection, partial manifest")
 finally:
     addon.unregister()
