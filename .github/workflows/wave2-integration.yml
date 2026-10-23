@@ -55,3 +55,4 @@ jobs:
           blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/baseline/blender_smoke.py
           blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/materials/blender_smoke.py
           blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_smoke.py
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_namespace_smoke.py
