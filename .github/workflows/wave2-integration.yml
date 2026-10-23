@@ -15,6 +15,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # I0 must test the exact PR HEAD, never a synthetic merge-ref SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -31,6 +35,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # I0 must test the exact PR HEAD, never a synthetic merge-ref SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Checkout real upstream official importer at frozen licensed commit
         uses: actions/checkout@v4
         with:
