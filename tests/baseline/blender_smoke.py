@@ -30,8 +30,8 @@ registered = False
 try:
     addon.register()
     registered = True
-    self_rna = bpy.ops.import_scene.max.get_rna_type()
-    assert self_rna.identifier == "IMPORT_SCENE_OT_max", self_rna.identifier
+    self_rna = bpy.ops.import_scene.maxblend.get_rna_type()
+    assert self_rna.identifier == "IMPORT_SCENE_OT_maxblend", self_rna.identifier
     from maxblend_wave0_smoke import import_max
     assert import_max.is_maxfile(io.BytesIO(import_max.MAGIC + bytes(1528)))
     assert not import_max.is_maxfile(io.BytesIO(b"INVALID!" + bytes(1528)))
@@ -39,7 +39,7 @@ finally:
     if registered:
         addon.unregister()
 print(json.dumps({
-    "blender": bpy.app.version_string, "operator": "import_scene.max",
+    "blender": bpy.app.version_string, "operator": "import_scene.maxblend",
     "register_unregister": "pass",
     "synthetic_header_probe": "pass",
     "actual_max_scene_import": "skipped_no_redistributable_fixture",

@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # I0 must test the exact PR HEAD, never a synthetic merge-ref SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -24,6 +28,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # I0 must test the exact PR HEAD, never a synthetic merge-ref SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - name: Download Blender 4.2.0 from official release with publisher checksum
         shell: bash
         run: |
@@ -46,10 +54,17 @@ jobs:
           set -euo pipefail
           export BLENDER_USER_CONFIG="$RUNNER_TEMP/blender-wave0-user"
           mkdir -p "$BLENDER_USER_CONFIG" "$RUNNER_TEMP/blender-wave0-repo"
-          blender --command extension validate dist/io_scene_max-1.9.2.zip
+          blender --command extension validate dist/maxblend_importer_fork-1.9.3.zip
           blender --command extension repo-add wave0_ci --directory="$RUNNER_TEMP/blender-wave0-repo"
-          blender --command extension install-file --repo wave0_ci dist/io_scene_max-1.9.2.zip
-          test -f "$RUNNER_TEMP/blender-wave0-repo/io_scene_max/blender_manifest.toml"
-          test -f "$RUNNER_TEMP/blender-wave0-repo/io_scene_max/__init__.py"
+          blender --command extension install-file --repo wave0_ci dist/maxblend_importer_fork-1.9.3.zip
+          test -f "$RUNNER_TEMP/blender-wave0-repo/maxblend_importer_fork/blender_manifest.toml"
+          test -f "$RUNNER_TEMP/blender-wave0-repo/maxblend_importer_fork/__init__.py"
+      - name: Real installed ZIP default-deny (no native parser, even with experimental acknowledgment)
+        shell: bash
+        run: |
+          set -euo pipefail
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 \
+            --python tests/integration/blender_zip_install_smoke.py -- \
+            "$RUNNER_TEMP/blender-wave0-repo/maxblend_importer_fork"
       - name: Headless register and unregister
-        run: blender --background --factory-startup --python tests/baseline/blender_smoke.py
+        run: blender --background --factory-startup --python-exit-code 1 --python tests/baseline/blender_smoke.py

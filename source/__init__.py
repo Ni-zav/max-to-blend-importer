@@ -4,11 +4,24 @@
 
 
 __author__ = "Sebastian Sille <nrgsille@gmail.com>"
-__version__ = "1.9.2"
+__version__ = "1.9.3"
 __date__ = "18 Nov 2023"
+# Fork identity: see blender_manifest.toml; upstream authorship retained.
+_last_session = None
 
 
 import bpy
+import sys
+
+# Wave 1 modules import the frozen F0 absolute package 'maxblend_core'.
+# Alias *our own* bundled copy during normal Blender extension loading; never
+# silently substitute a different installed add-on's core implementation.
+from . import maxblend_core as _maxblend_core
+_existing_core = sys.modules.get("maxblend_core")
+if _existing_core is not None and _existing_core is not _maxblend_core:
+    raise ImportError("MAXBLEND_CORE_NAMESPACE_COLLISION")
+sys.modules["maxblend_core"] = _maxblend_core
+
 from bpy_extras.io_utils import (
     ImportHelper,
     orientation_helper,
@@ -32,8 +45,8 @@ if "bpy" in locals():
 @orientation_helper(axis_forward='Y', axis_up='Z')
 class ImportMax(bpy.types.Operator, ImportHelper):
     """Import Autodesk MAX"""
-    bl_idname = "import_scene.max"
-    bl_label = "Import MAX (.max)"
+    bl_idname = "import_scene.maxblend"
+    bl_label = "MAXBLEND EXPERIMENTAL Preview (.max)"
     bl_options = {'PRESET', 'UNDO'}
 
     filename_ext = ".max"
@@ -48,10 +61,15 @@ class ImportMax(bpy.types.Operator, ImportHelper):
         soft_min=0.0, soft_max=10000.0,
         default=1.0,
     )
+    approved_texture_root: StringProperty(
+        name="Approved Texture Folder",
+        description="Optional explicit local folder; bitmap paths outside are blocked",
+        subtype='DIR_PATH',
+        default="",
+    )
     use_image_search: BoolProperty(
         name="Image Search",
-        description="Search subdirectories for any associated images "
-        "(Warning, may be slow)",
+        description="Legacy option retained for API compatibility; guarded F6 import never performs recursive image searches",
         default=True,
     )
     object_filter: EnumProperty(
@@ -70,6 +88,14 @@ class ImportMax(bpy.types.Operator, ImportHelper):
         description="Create a new collection",
         default=False,
     )
+    experimental_ack: BoolProperty(
+        name="I accept experimental MAX parsing risk",
+        description=("Experimental Linux-only preview from a clean reviewed Git checkout. "
+                     "No syscall/network sandbox: use only trusted files in a disposable VM. "
+                     "ZIP installation is not authorized to parse files."),
+        default=False,
+        options={'SKIP_SAVE'},
+    )
     use_apply_matrix: BoolProperty(
         name="Apply Matrix",
         description="Use matrix to transform the objects",
@@ -81,16 +107,66 @@ class ImportMax(bpy.types.Operator, ImportHelper):
         layout.use_property_split = True
         layout.use_property_decorate = False
 
+        layout.label(text="EXPERIMENTAL ONLY - NOT SAFE FOR UNTRUSTED MAX", icon='ERROR')
+        layout.prop(self, "experimental_ack")
         import_include(layout, self)
         import_transform(layout, self)
 
     def execute(self, context):
-        from . import import_max
-        keywords = self.as_keywords(ignore=("axis_forward", "axis_up", "filter_glob"))
-        global_matrix = axis_conversion(from_forward=self.axis_forward, from_up=self.axis_up,).to_4x4()
-        keywords["global_matrix"] = global_matrix
-
-        return import_max.load(self, context, **keywords)
+        """Import only through the external bounded worker, never legacy in-process."""
+        import json
+        import os
+        from mathutils import Matrix
+        from .maxblend_runtime import ImportRejected
+        from .maxblend_isolation import isolated_import
+        from .maxblend_bridge import capture
+        global _last_session
+        _last_session = None
+        try:
+            if self.experimental_ack is not True:
+                raise ImportRejected("EXPERIMENTAL_IMPORT_ACK_REQUIRED")
+            if len(self.files) > 1:
+                raise ImportRejected("MULTIFILE_IMPORT_REQUIRES_SEPARATE_JOBS")
+            if len(self.files) == 1:
+                filename = os.path.join(self.directory, self.files[0].name)
+            else:
+                filename = self.filepath
+            axes = axis_conversion(
+                from_forward=self.axis_forward, from_up=self.axis_up).to_4x4()
+            scale = axes @ Matrix.Scale(self.scale_objects, 4)
+            if not self.use_apply_matrix:
+                # Keeping legacy flag but not guessing its native semantics.
+                raise ImportRejected("UNAPPLIED_NATIVE_MATRIX_UNSUPPORTED")
+            if self.approved_texture_root:
+                # Source image decoders are blocked in the sandboxed MVP.
+                raise ImportRejected("EXTERNAL_TEXTURE_DECODING_UNSUPPORTED")
+            objects, response = isolated_import(
+                os.path.abspath(filename), context, global_matrix=scale,
+                object_filter=set(self.object_filter), use_collection=self.use_collection,
+                experimental_ack=self.experimental_ack)
+            try:
+                _last_session = capture(objects, response, context=context)
+                # Strict scene/v1: physical transforms/bounds remain null until
+                # independently verified source units and axes are available.
+                context.scene["maxblend_scene_v1"] = json.dumps(
+                    _last_session.scene_manifest, separators=(",", ":"))
+            except Exception:
+                # Canonical projection/publication is atomic with replay.
+                for obj in objects.values():
+                    mesh = obj.data if obj.type == 'MESH' else None
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                    if mesh is not None and mesh.users == 0:
+                        bpy.data.meshes.remove(mesh)
+                _last_session = None
+                raise ImportRejected("SCENE_BRIDGE_FAILED") from None
+            self.report({'WARNING'}, "MAX imported as partial isolated preview; unknown source fidelity")
+            return {'FINISHED'}
+        except ImportRejected as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        except Exception:
+            self.report({'ERROR'}, "ISOLATED_IMPORT_INTERNAL_FAILURE")
+            return {'CANCELLED'}
 
     def invoke(self, context, event):
         return self.invoke_popup(context)
@@ -101,9 +177,13 @@ def import_include(layout, operator):
     header.label(text="Include")
     if body:
         layrow = layout.row(align=True)
+        layrow.enabled = False  # Legacy option is API-compatible, but intentionally inactive in F6.
         layrow.prop(operator, "use_image_search")
         layrow.label(text="", icon='OUTLINER_OB_IMAGE' if operator.use_image_search else 'IMAGE_DATA')
         layout.column().prop(operator, "object_filter")
+        layout.prop(operator, "approved_texture_root")
+        layout.label(text="Texture lookup is default-deny and never recursive", icon='INFO')
+
         layrow = layout.row(align=True)
         layrow.prop(operator, "use_collection")
         layrow.label(text="", icon='OUTLINER_COLLECTION' if operator.use_collection else 'GROUP')
@@ -122,9 +202,9 @@ def import_transform(layout, operator):
 
 
 class IO_FH_max(bpy.types.FileHandler):
-    bl_idname = "IO_FH_max"
-    bl_label = "3DS MAX"
-    bl_import_operator = "import_scene.max"
+    bl_idname = "IO_FH_maxblend"
+    bl_label = "MAXBLEND MAX"
+    bl_import_operator = "import_scene.maxblend"
     # Deliberately no bl_export_operator: no native .max exporter exists.
     bl_file_extensions = ".max"
 
@@ -134,7 +214,12 @@ class IO_FH_max(bpy.types.FileHandler):
 
 
 def menu_func(self, context):
-    self.layout.operator(ImportMax.bl_idname, text="Autodesk MAX (.max)")
+    self.layout.operator(ImportMax.bl_idname, text="MAXBLEND Experimental Preview (.max)")
+
+
+def get_last_import_session():
+    """P6 receives real bpy references only within this host session."""
+    return _last_session
 
 
 def register():
@@ -144,6 +229,8 @@ def register():
 
 
 def unregister():
+    global _last_session
+    _last_session = None
     bpy.types.TOPBAR_MT_file_import.remove(menu_func)
     bpy.utils.unregister_class(IO_FH_max)
     bpy.utils.unregister_class(ImportMax)

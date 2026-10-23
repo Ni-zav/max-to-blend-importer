@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: fork-wave2-integration
+on:
+  pull_request:
+    paths:
+      - 'source/**'
+      - 'tests/integration/**'
+      - '.github/workflows/wave2-integration.yml'
+  push:
+    branches: [integrate/w2-importer]
+permissions:
+  contents: read
+jobs:
+  modules:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # I0 must test the exact PR HEAD, never a synthetic merge-ref SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax
+        run: python -m compileall -q source tests
+      - name: All merged F0/F1/F2/F3/F4/F5/F7/F8 and F6 isolated suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suite in baseline transforms geometry materials textures container scene_nodes instances integration; do
+            PYTHONPATH=source python -m unittest discover -s "tests/$suite" -p 'test_*.py' -v
+          done
+  blender-4-2:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # I0 must test the exact PR HEAD, never a synthetic merge-ref SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Checkout real upstream official importer at frozen licensed commit
+        uses: actions/checkout@v4
+        with:
+          repository: nrgsille76/io_scene_max
+          ref: 37db107126f956f7219152671443080360565691
+          path: upstream-official
+          persist-credentials: false
+      - name: Download official Blender 4.2 with SHA256 verification (CI only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://download.blender.org/release/Blender4.2
+          curl --fail --location --retry 3 --silent --show-error "$base/blender-4.2.0-linux-x64.tar.xz" -o blender.tar.xz
+          curl --fail --location --retry 3 --silent --show-error "$base/blender-4.2.0.sha256" -o blender.sha256
+          grep 'blender-4.2.0-linux-x64.tar.xz' blender.sha256 | sed 's#blender-4.2.0-linux-x64.tar.xz#blender.tar.xz#' | sha256sum --check -
+          tar -xf blender.tar.xz
+          echo "$PWD/blender-4.2.0-linux-x64" >> "$GITHUB_PATH"
+      - name: Build/validate extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          blender --command extension build --source-dir=source --output-dir=dist
+          blender --command extension validate dist/maxblend_importer_fork-1.9.3.zip
+          unzip -t dist/maxblend_importer_fork-1.9.3.zip
+      - name: Baseline registration + material + integration smoke (fatal on Python failures)
+        shell: bash
+        run: |
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/baseline/blender_smoke.py
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/materials/blender_smoke.py
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_smoke.py
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_namespace_smoke.py
+          blender --background --factory-startup --disable-autoexec --python-exit-code 1 --python tests/integration/blender_official_coexist.py

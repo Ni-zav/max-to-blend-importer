@@ -46,10 +46,10 @@ class UpstreamCompatibilityTests(unittest.TestCase):
         cls.addon = ast.parse((ROOT / "source/__init__.py").read_text(encoding="utf-8"))
         cls.parser = ast.parse((ROOT / "source/import_max.py").read_text(encoding="utf-8"))
 
-    def test_manifest_identifiers_unchanged(self):
+    def test_manifest_fork_identity_and_upstream_compat(self):
         manifest = tomllib.loads((ROOT / "source/blender_manifest.toml").read_text())
-        self.assertEqual(manifest["id"], "io_scene_max")
-        self.assertEqual(manifest["version"], "1.9.2")
+        self.assertEqual(manifest["id"], "maxblend_importer_fork")
+        self.assertEqual(manifest["version"], "1.9.3")
         self.assertEqual(manifest["blender_version_min"], "4.2.0")
 
     def test_existing_operator_cli_properties_preserved(self):
@@ -66,7 +66,7 @@ class UpstreamCompatibilityTests(unittest.TestCase):
                          if isinstance(node, ast.Assign)
                          and any(isinstance(target, ast.Name) and target.id == "bl_idname"
                                  for target in node.targets))
-        self.assertEqual(assert_id, "import_scene.max")
+        self.assertEqual(assert_id, "import_scene.maxblend")
 
     def test_no_nonexistent_export_handler(self):
         handler, = [node for node in self.addon.body
