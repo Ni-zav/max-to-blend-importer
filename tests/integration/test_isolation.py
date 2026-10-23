@@ -8,6 +8,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2] / "source"
 sys.path.insert(0, str(ROOT))
@@ -26,6 +27,32 @@ def object_record(node_id="node_0", parent=None):
                                       0, 0, 1, 0, 0, 0, 0, 1],
             "mesh": {"vertices": [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
                      "faces": [[0, 1, 2]], "uv": []}}
+
+
+class ExperimentalBoundaryTests(unittest.TestCase):
+    def test_default_and_malformed_ack_block_before_bpy_or_worker(self):
+        for value in (False, None, 0, 1, "true", {}, []):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    ImportRejected, "EXPERIMENTAL_IMPORT_ACK_REQUIRED"):
+                isolation.require_experimental_authorization(value)
+        # Public Python entrypoint also blocks before bpy import/input I/O.
+        with self.assertRaisesRegex(ImportRejected, "EXPERIMENTAL_IMPORT_ACK_REQUIRED"):
+            isolation.isolated_import("/definitely-not-a-real-client.max", None)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux-only experimental parser")
+    def test_clean_review_checkout_only_with_explicit_ack(self):
+        import subprocess
+        head = subprocess.check_output(
+            ["git", "-C", str(ROOT.parent), "rev-parse", "HEAD"], text=True).strip()
+        self.assertEqual(isolation.require_experimental_authorization(True), head)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux-only experimental parser")
+    def test_checkout_failure_fails_closed_even_if_acknowledged(self):
+        from test_f6_package import maxblend_bridge
+        with mock.patch.object(maxblend_bridge, "_verified_checkout_commit",
+                               side_effect=ValueError("IMPORTER_CHECKOUT_UNATTESTED")):
+            with self.assertRaisesRegex(ImportRejected, "EXPERIMENTAL_GIT_CHECKOUT_REQUIRED"):
+                isolation.require_experimental_authorization(True)
 
 
 class ValidationTests(unittest.TestCase):
