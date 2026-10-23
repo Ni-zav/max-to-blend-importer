@@ -29,6 +29,7 @@ class ImportReport:
     objects_created: int = 0
     materials_created: int = 0
     textures_linked: int = 0
+    source_sha256: str | None = None
     warnings: list[str] = field(default_factory=list)
 
     def warn(self, code: str) -> None:
@@ -50,6 +51,7 @@ class ImportReport:
             "textures_linked": self.textures_linked,
             "warnings": tuple(self.warnings),
             "native_max_export": False,
+            "source_sha256": self.source_sha256,
             "source_units_verified": False,
         }
 
