@@ -77,8 +77,15 @@ try:
                "world": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
                "mesh": {"vertices": [[0,0,0],[1,0,0],[0,1,0]],
                         "faces": [[0,1,2]], "uv": []}}]}
-    session = capture({"node_3": obj}, raw, context=bpy.context)
-    assert session.resolve("node_3") is obj
+    from maxblend_i0_smoke.maxblend_isolation import materialize, validate_response
+    raw["objects"][0]["mesh"]["native_face_ids"] = [13]
+    validated = validate_response(raw)
+    replayed = materialize(validated, bpy.context)
+    assert replayed["node_3"].type == 'MESH'
+    assert replayed["node_3"]["maxblend.raw_face_material_ids"][0] == 13
+    assert replayed["node_3"].data.polygons[0].material_index == 0
+    session = capture(replayed, validated, context=bpy.context)
+    assert session.resolve("node_3") is replayed["node_3"]
     scene = session.scene_manifest
     assert scene["schema_version"] == "maxblend.scene/v1"
     assert scene["status"] == "partial"
