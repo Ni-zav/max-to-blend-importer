@@ -50,6 +50,6 @@ jobs:
           blender --command extension repo-add wave0_ci --directory="$RUNNER_TEMP/blender-wave0-repo"
           blender --command extension install-file --repo wave0_ci dist/maxblend_importer_fork-1.9.3.zip
           test -f "$RUNNER_TEMP/blender-wave0-repo/maxblend_importer_fork/blender_manifest.toml"
-          test -f "$RUNNER_TEMP/blender-wave0-repo/io_scene_max/__init__.py"
+          test -f "$RUNNER_TEMP/blender-wave0-repo/maxblend_importer_fork/__init__.py"
       - name: Headless register and unregister
         run: blender --background --factory-startup --python tests/baseline/blender_smoke.py
