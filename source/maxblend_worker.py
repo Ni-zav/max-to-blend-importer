@@ -92,7 +92,7 @@ def main():
     if not filter_set.issubset({"UV", "MATERIAL", "EMPTY", "PRIMITIVE", "ARMATURE"}):
         raise ValueError("UNSAFE_FILTER")
     matrix = Matrix(params["global_matrix"])
-    if not matrix.is_finite if hasattr(matrix, "is_finite") else False:
+    if any(not math.isfinite(float(x)) for row in matrix for x in row):
         raise ValueError("INVALID_MATRIX")
     addon = load_addon()
     from maxblend_isolated_worker import import_max
@@ -100,13 +100,13 @@ def main():
     # original renderer graphs, and external XRefs remain unsupported.
     import_max._texture_root = None
     import_max._strict_import = True
-    existing = set(bpy.data.objects)
+    existing = {obj.as_pointer() for obj in bpy.data.objects}
     report = import_max.read(
         bpy.context, source, matrix, filter_set,
         search=False, transform=True)
     # Legacy import may have created objects even on partially unsupported
     # data. Return only explicitly tagged/imported node IDs.
-    added = [obj for obj in bpy.data.objects if obj not in existing]
+    added = [obj for obj in bpy.data.objects if obj.as_pointer() not in existing]
     if any("maxblend.node_id" not in obj for obj in added):
         raise ValueError("UNATTESTED_BLENDER_OBJECT")
     objects = snapshot_objects(added)
