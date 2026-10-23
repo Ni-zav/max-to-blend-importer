@@ -249,11 +249,32 @@ def materialize(response, context, *, collection=None):
         raise ImportRejected("WORKER_REPLAY_FAILED") from None
 
 
-def isolated_import(filename, context, *, global_matrix=None,
-                    object_filter=None, use_collection=False, timeout=30):
-    """Only public import entrypoint. Strict Linux; no in-process fallback."""
-    import bpy
+
+def require_experimental_authorization(experimental_ack):
+    """Fail before touching native input unless the experimental boundary is met.
+
+    Neither Blender extension installation nor Linux rlimits make native MAX
+    parsing safe for untrusted files. Production and ZIP-only imports remain
+    disabled: the exact loaded source must be a clean Git checkout.
+    """
+    if experimental_ack is not True:
+        raise ImportRejected("EXPERIMENTAL_IMPORT_ACK_REQUIRED")
     _limits()
+    from .maxblend_bridge import _verified_checkout_commit
+    try:
+        return _verified_checkout_commit()
+    except (ValueError, OSError):
+        raise ImportRejected("EXPERIMENTAL_GIT_CHECKOUT_REQUIRED") from None
+
+
+def isolated_import(filename, context, *, global_matrix=None,
+                    object_filter=None, use_collection=False, timeout=30,
+                    experimental_ack=False):
+    """Experimental ONLY; no ZIP-only/production parser or in-process fallback."""
+    # Authorization must precede file reads or child process creation. The
+    # opt-in is per-import and never persisted as a global addon preference.
+    require_experimental_authorization(experimental_ack)
+    import bpy
     name = os.fspath(filename)
     if not Path(name).is_absolute():
         raise ImportRejected("INPUT_MUST_BE_ABSOLUTE")
