@@ -17,7 +17,7 @@ if PACKAGE not in sys.modules:
     module.__path__ = [str(ROOT)]
     sys.modules[PACKAGE] = module
 isolation = importlib.import_module(PACKAGE + ".maxblend_isolation")
-from maxblend_runtime import ImportRejected  # noqa: E402
+ImportRejected = isolation.ImportRejected  # same package-qualified exception class
 
 
 def object_record(node_id="node_0", parent=None):
