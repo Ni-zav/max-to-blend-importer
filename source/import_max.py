@@ -2598,6 +2598,9 @@ def _make_scene_verified(context, settings, mscale, transform, parent):
             if not objects:
                 _import_report.warn("NODE_NOT_CONSTRUCTED")
                 continue
+            for constructed in objects:
+                constructed["maxblend.node_id"] = node_id
+                constructed["maxblend.provenance"] = "Scene:index"
             created[node_id] = objects[0]
             if role == "mesh" and geometry_key not in mesh_cache:
                 mesh_cache[geometry_key] = objects[0]
@@ -2644,6 +2647,8 @@ def read(context, filename, mscale, obtypes, search, transform):
     _last_report = _import_report
     try:
         data, probe = checked_bytes(os.path.abspath(filename))
+        import hashlib
+        _import_report.source_sha256 = hashlib.sha256(data).hexdigest()
         _import_report.container = probe.kind
         settings = filename, obtypes, False
         with ImportMaxFile(data) as maxfile:
