@@ -43,8 +43,8 @@ if "bpy" in locals():
 @orientation_helper(axis_forward='Y', axis_up='Z')
 class ImportMax(bpy.types.Operator, ImportHelper):
     """Import Autodesk MAX"""
-    bl_idname = "import_scene.max"
-    bl_label = "Import MAX (.max)"
+    bl_idname = "import_scene.maxblend"
+    bl_label = "MAXBLEND Import (.max)"
     bl_options = {'PRESET', 'UNDO'}
 
     filename_ext = ".max"
@@ -142,9 +142,9 @@ def import_transform(layout, operator):
 
 
 class IO_FH_max(bpy.types.FileHandler):
-    bl_idname = "IO_FH_max"
-    bl_label = "3DS MAX"
-    bl_import_operator = "import_scene.max"
+    bl_idname = "IO_FH_maxblend"
+    bl_label = "MAXBLEND MAX"
+    bl_import_operator = "import_scene.maxblend"
     # Deliberately no bl_export_operator: no native .max exporter exists.
     bl_file_extensions = ".max"
 
@@ -154,7 +154,7 @@ class IO_FH_max(bpy.types.FileHandler):
 
 
 def menu_func(self, context):
-    self.layout.operator(ImportMax.bl_idname, text="Autodesk MAX (.max)")
+    self.layout.operator(ImportMax.bl_idname, text="MAXBLEND Fork (.max)")
 
 
 def register():
